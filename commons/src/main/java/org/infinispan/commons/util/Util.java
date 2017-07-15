@@ -53,6 +53,7 @@ import org.infinispan.commons.marshall.Marshaller;
 public final class Util {
 
    private static final boolean IS_ARRAYS_DEBUG = Boolean.getBoolean("infinispan.arrays.debug");
+   private static final int COLLECTIONS_LIMIT = Integer.getInteger("infinispan.collections.limit", 8);
    private static final boolean IS_OSGI_CONTEXT;
 
    public static final Object[] EMPTY_OBJECT_ARRAY = new Object[0];
@@ -216,10 +217,8 @@ public final class Util {
    public static <T> T getInstance(Class<T> clazz) {
       try {
          return getInstanceStrict(clazz);
-      } catch (IllegalAccessException iae) {
+      } catch (IllegalAccessException | InstantiationException iae) {
          throw new CacheConfigurationException("Unable to instantiate class " + clazz.getName(), iae);
-      } catch (InstantiationException ie) {
-         throw new CacheConfigurationException("Unable to instantiate class " + clazz.getName(), ie);
       }
    }
 
@@ -331,7 +330,7 @@ public final class Util {
     * with the time of other nodes.
     * @return the value of {@link System#nanoTime()}, but converted in Milliseconds.
     */
-   public static final long currentMillisFromNanotime() {
+   public static long currentMillisFromNanotime() {
       return TimeUnit.MILLISECONDS.convert(System.nanoTime(), TimeUnit.NANOSECONDS);
    }
 
@@ -471,10 +470,30 @@ public final class Util {
    }
 
    public static String toStr(Object o) {
-      if (o instanceof byte[]) {
-         return printArray((byte[]) o, false);
-      } else if (o == null) {
+      if (o == null) {
          return "null";
+      } else if (o.getClass().isArray()) {
+         // as Java arrays are covariant, this cast is safe unless it's primitive
+         if (o.getClass().getComponentType().isPrimitive()) {
+            if (o instanceof byte[]) {
+               return printArray((byte[]) o, false);
+            } else if (o instanceof int[]) {
+               return Arrays.toString((int[]) o);
+            } else if (o instanceof long[]) {
+               return Arrays.toString((long[]) o);
+            } else if (o instanceof short[]) {
+               return Arrays.toString((short[]) o);
+            } else if (o instanceof double[]) {
+               return Arrays.toString((double[]) o);
+            } else if (o instanceof float[]) {
+               return Arrays.toString((float[]) o);
+            } else if (o instanceof char[]) {
+               return Arrays.toString((char[]) o);
+            } else if (o instanceof boolean[]) {
+               return Arrays.toString((boolean[]) o);
+            }
+         }
+         return Arrays.toString((Object[]) o);
       } else {
          return o.toString();
       }
@@ -490,11 +509,16 @@ public final class Util {
 
       StringBuilder sb = new StringBuilder();
       sb.append('[');
-      for (;;) {
+      for (int counter = 0;;) {
          E e = i.next();
          sb.append(e == collection ? "(this Collection)" : toStr(e));
          if (! i.hasNext())
             return sb.append(']').toString();
+         if (++counter >= COLLECTIONS_LIMIT) {
+            return sb.append("...<")
+                  .append(collection.size() - COLLECTIONS_LIMIT)
+                  .append(" other elements>]").toString();
+         }
          sb.append(", ");
       }
    }
@@ -548,6 +572,22 @@ public final class Util {
       while (i < limit && i < input.length) {
          result[2*i] = lookup[(input[i] >> 4) & 0x0F];
          result[2*i+1] = lookup[(input[i] & 0x0F)];
+         i++;
+      }
+      return String.valueOf(result);
+   }
+
+   public static String toHexString(byte input[], int offset, int limit) {
+      if (input == null || input.length <= 0)
+         return "null";
+
+      int length = limit - offset;
+      char[] result = new char[length * 2];
+
+      int i = 0;
+      while ((i + offset) < limit && (i + offset) < input.length) {
+         result[2*i] = HEX_VALUES.charAt((input[i + offset] >> 4) & 0x0F);
+         result[2*i+1] = HEX_VALUES.charAt((input[i + offset] & 0x0F));
          i++;
       }
       return String.valueOf(result);
@@ -607,12 +647,12 @@ public final class Util {
       MonitorInfo[] monitors = threadInfo.getLockedMonitors();
       for (int i = 0; i < stacktrace.length; i++) {
           StackTraceElement ste = stacktrace[i];
-          threadDump.append(INDENT + "at " + ste.toString());
+          threadDump.append(INDENT).append("at ").append(ste.toString());
           threadDump.append("\n");
           for (int j = 1; j < monitors.length; j++) {
               MonitorInfo mi = monitors[j];
               if (mi.getLockedStackDepth() == i) {
-                  threadDump.append(INDENT + "  - locked " + mi);
+                  threadDump.append(INDENT).append("  - locked ").append(mi);
                   threadDump.append("\n");
               }
           }
@@ -621,10 +661,10 @@ public final class Util {
    }
 
    private static void printLockInfo(LockInfo[] locks, StringBuilder threadDump) {
-      threadDump.append(INDENT + "Locked synchronizers: count = " + locks.length);
+      threadDump.append(INDENT).append("Locked synchronizers: count = ").append(locks.length);
       threadDump.append("\n");
       for (LockInfo li : locks) {
-         threadDump.append(INDENT + "  - " + li);
+         threadDump.append(INDENT).append("  - ").append(li);
          threadDump.append("\n");
       }
       threadDump.append("\n");
@@ -637,11 +677,14 @@ public final class Util {
             threadInfo.getThreadState());
       if (threadInfo.getLockName() != null && threadInfo.getThreadState() != Thread.State.BLOCKED) {
           String[] lockInfo = threadInfo.getLockName().split("@");
-          sb.append("\n" + INDENT +"- waiting on <0x" + lockInfo[1] + "> (a " + lockInfo[0] + ")");
-          sb.append("\n" + INDENT +"- locked <0x" + lockInfo[1] + "> (a " + lockInfo[0] + ")");
+          sb.append("\n").append(INDENT).append("- waiting on <0x").append(lockInfo[1]).append("> (a ")
+                .append(lockInfo[0]).append(")");
+          sb.append("\n").append(INDENT).append("- locked <0x").append(lockInfo[1]).append("> (a ").append(lockInfo[0])
+                .append(")");
       } else if (threadInfo.getLockName() != null && threadInfo.getThreadState() == Thread.State.BLOCKED) {
           String[] lockInfo = threadInfo.getLockName().split("@");
-          sb.append("\n" + INDENT +"- waiting to lock <0x" + lockInfo[1] + "> (a " + lockInfo[0] + ")");
+          sb.append("\n").append(INDENT).append("- waiting to lock <0x").append(lockInfo[1]).append("> (a ")
+                .append(lockInfo[0]).append(")");
       }
       if (threadInfo.isSuspended())
           sb.append(" (suspended)");
@@ -652,8 +695,8 @@ public final class Util {
       threadDump.append(sb.toString());
       threadDump.append("\n");
       if (threadInfo.getLockOwnerName() != null) {
-           threadDump.append(INDENT + " owned by " + threadInfo.getLockOwnerName() +
-                              " id=" + threadInfo.getLockOwnerId());
+           threadDump.append(INDENT).append(" owned by ").append(threadInfo.getLockOwnerName()).append(" id=")
+                 .append(threadInfo.getLockOwnerId());
            threadDump.append("\n");
       }
    }
@@ -1003,4 +1046,8 @@ public final class Util {
       }
       return sb.toString();
    }
+
+  public static char[] toCharArray(String s) {
+     return s == null ? null : s.toCharArray();
+  }
 }

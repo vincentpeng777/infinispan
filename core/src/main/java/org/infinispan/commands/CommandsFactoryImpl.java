@@ -17,7 +17,6 @@ import java.util.function.Function;
 import javax.transaction.xa.Xid;
 
 import org.infinispan.Cache;
-import org.infinispan.atomic.Delta;
 import org.infinispan.commands.control.LockControlCommand;
 import org.infinispan.commands.functional.ReadOnlyKeyCommand;
 import org.infinispan.commands.functional.ReadOnlyManyCommand;
@@ -55,17 +54,19 @@ import org.infinispan.commands.tx.totalorder.TotalOrderNonVersionedPrepareComman
 import org.infinispan.commands.tx.totalorder.TotalOrderRollbackCommand;
 import org.infinispan.commands.tx.totalorder.TotalOrderVersionedCommitCommand;
 import org.infinispan.commands.tx.totalorder.TotalOrderVersionedPrepareCommand;
-import org.infinispan.commands.write.ApplyDeltaCommand;
 import org.infinispan.commands.write.BackupAckCommand;
 import org.infinispan.commands.write.BackupMultiKeyAckCommand;
 import org.infinispan.commands.write.BackupPutMapRpcCommand;
 import org.infinispan.commands.write.BackupWriteRpcCommand;
 import org.infinispan.commands.write.ClearCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.DataWriteCommand;
 import org.infinispan.commands.write.EvictCommand;
 import org.infinispan.commands.write.ExceptionAckCommand;
 import org.infinispan.commands.write.InvalidateCommand;
 import org.infinispan.commands.write.InvalidateL1Command;
+import org.infinispan.commands.write.InvalidateVersionsCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.PutMapCommand;
 import org.infinispan.commands.write.RemoveCommand;
@@ -73,21 +74,23 @@ import org.infinispan.commands.write.RemoveExpiredCommand;
 import org.infinispan.commands.write.ReplaceCommand;
 import org.infinispan.commands.write.ValueMatcher;
 import org.infinispan.commands.write.WriteCommand;
-import org.infinispan.commons.api.functional.EntryView.ReadEntryView;
-import org.infinispan.commons.api.functional.EntryView.ReadWriteEntryView;
-import org.infinispan.commons.api.functional.EntryView.WriteEntryView;
+import org.infinispan.functional.EntryView.ReadEntryView;
+import org.infinispan.functional.EntryView.ReadWriteEntryView;
+import org.infinispan.functional.EntryView.WriteEntryView;
 import org.infinispan.commons.marshall.Externalizer;
 import org.infinispan.commons.marshall.LambdaExternalizer;
 import org.infinispan.commons.marshall.SerializeFunctionWith;
 import org.infinispan.commons.marshall.StreamingMarshaller;
 import org.infinispan.commons.util.EnumUtil;
 import org.infinispan.configuration.cache.Configuration;
+import org.infinispan.conflict.impl.StateReceiver;
 import org.infinispan.container.DataContainer;
 import org.infinispan.container.InternalEntryFactory;
 import org.infinispan.context.InvocationContextFactory;
 import org.infinispan.context.impl.FlagBitSets;
 import org.infinispan.distribution.DistributionManager;
 import org.infinispan.distribution.group.impl.GroupManager;
+import org.infinispan.factories.ComponentRegistry;
 import org.infinispan.factories.KnownComponentNames;
 import org.infinispan.factories.annotations.ComponentName;
 import org.infinispan.factories.annotations.Inject;
@@ -98,6 +101,7 @@ import org.infinispan.interceptors.locking.ClusteringDependentLogic;
 import org.infinispan.marshall.core.GlobalMarshaller;
 import org.infinispan.metadata.Metadata;
 import org.infinispan.notifications.cachelistener.CacheNotifier;
+import org.infinispan.persistence.manager.OrderedUpdatesManager;
 import org.infinispan.remoting.transport.Address;
 import org.infinispan.statetransfer.StateChunk;
 import org.infinispan.statetransfer.StateConsumer;
@@ -168,6 +172,9 @@ public class CommandsFactoryImpl implements CommandsFactory {
    private ClusterStreamManager clusterStreamManager;
    private ClusteringDependentLogic clusteringDependentLogic;
    private CommandAckCollector commandAckCollector;
+   private StateReceiver stateReceiver;
+   private ComponentRegistry componentRegistry;
+   private OrderedUpdatesManager orderedUpdatesManager;
 
    private Map<Byte, ModuleCommandInitializer> moduleCommandInitializers;
    private StreamingMarshaller marshaller;
@@ -185,7 +192,10 @@ public class CommandsFactoryImpl implements CommandsFactory {
                                  GroupManager groupManager,
                                  LocalStreamManager localStreamManager, ClusterStreamManager clusterStreamManager,
                                  ClusteringDependentLogic clusteringDependentLogic, StreamingMarshaller marshaller,
-                                 CommandAckCollector commandAckCollector) {
+                                 CommandAckCollector commandAckCollector,
+                                 StateReceiver stateReceiver,
+                                 ComponentRegistry componentRegistry,
+                                 OrderedUpdatesManager orderedUpdatesManager) {
       this.dataContainer = container;
       this.notifier = notifier;
       this.cache = cache;
@@ -212,6 +222,9 @@ public class CommandsFactoryImpl implements CommandsFactory {
       this.clusteringDependentLogic = clusteringDependentLogic;
       this.marshaller = marshaller;
       this.commandAckCollector = commandAckCollector;
+      this.stateReceiver = stateReceiver;
+      this.componentRegistry = componentRegistry;
+      this.orderedUpdatesManager = orderedUpdatesManager;
    }
 
    @Start(priority = 1)
@@ -265,6 +278,16 @@ public class CommandsFactoryImpl implements CommandsFactory {
    public ReplaceCommand buildReplaceCommand(Object key, Object oldValue, Object newValue, Metadata metadata, long flagsBitSet) {
       return new ReplaceCommand(key, oldValue, newValue, notifier, metadata, flagsBitSet,
                                 generateUUID(transactional));
+   }
+
+   @Override
+   public ComputeCommand buildComputeCommand(Object key, BiFunction mappingFunction, boolean computeIfPresent, Metadata metadata, long flagsBitSet) {
+      return new ComputeCommand(key, mappingFunction, computeIfPresent, flagsBitSet, generateUUID(transactional), metadata, notifier, componentRegistry);
+   }
+
+   @Override
+   public ComputeIfAbsentCommand buildComputeIfAbsentCommand(Object key, Function mappingFunction, Metadata metadata, long flagsBitSet) {
+      return new ComputeIfAbsentCommand(key, mappingFunction, flagsBitSet, generateUUID(transactional), metadata, notifier, componentRegistry);
    }
 
    @Override
@@ -365,12 +388,17 @@ public class CommandsFactoryImpl implements CommandsFactory {
          case RemoveCommand.COMMAND_ID:
             ((RemoveCommand) c).init(notifier);
             break;
+         case ComputeCommand.COMMAND_ID:
+            ((ComputeCommand)c).init(notifier, componentRegistry);
+            break;
+         case ComputeIfAbsentCommand.COMMAND_ID:
+            ((ComputeIfAbsentCommand)c).init(notifier, componentRegistry);
+            break;
          case SingleRpcCommand.COMMAND_ID:
             SingleRpcCommand src = (SingleRpcCommand) c;
             src.init(interceptorChain, icf);
             if (src.getCommand() != null)
                initializeReplicableCommand(src.getCommand(), false);
-
             break;
          case InvalidateCommand.COMMAND_ID:
             InvalidateCommand ic = (InvalidateCommand) c;
@@ -426,7 +454,7 @@ public class CommandsFactoryImpl implements CommandsFactory {
             ((StateRequestCommand) c).init(stateProvider);
             break;
          case StateResponseCommand.COMMAND_ID:
-            ((StateResponseCommand) c).init(stateConsumer);
+            ((StateResponseCommand) c).init(stateConsumer, stateReceiver);
             break;
          case GetInDoubtTransactionsCommand.COMMAND_ID:
             GetInDoubtTransactionsCommand gptx = (GetInDoubtTransactionsCommand) c;
@@ -447,8 +475,6 @@ public class CommandsFactoryImpl implements CommandsFactory {
          case CompleteTransactionCommand.COMMAND_ID:
             CompleteTransactionCommand ccc = (CompleteTransactionCommand)c;
             ccc.init(recoveryManager);
-            break;
-         case ApplyDeltaCommand.COMMAND_ID:
             break;
          case CreateCacheCommand.COMMAND_ID:
             CreateCacheCommand createCacheCommand = (CreateCacheCommand)c;
@@ -500,7 +526,7 @@ public class CommandsFactoryImpl implements CommandsFactory {
             break;
          case BackupWriteRpcCommand.COMMAND_ID:
             BackupWriteRpcCommand bwc = (BackupWriteRpcCommand) c;
-            bwc.init(icf, interceptorChain, notifier);
+            bwc.init(icf, interceptorChain, notifier, componentRegistry);
             break;
          case BackupMultiKeyAckCommand.COMMAND_ID:
             ((BackupMultiKeyAckCommand) c).setCommandAckCollector(commandAckCollector);
@@ -510,6 +536,10 @@ public class CommandsFactoryImpl implements CommandsFactory {
             break;
          case BackupPutMapRpcCommand.COMMAND_ID:
             ((BackupPutMapRpcCommand) c).init(icf, interceptorChain, notifier);
+            break;
+         case InvalidateVersionsCommand.COMMAND_ID:
+            InvalidateVersionsCommand invalidateVersionsCommand = (InvalidateVersionsCommand) c;
+            invalidateVersionsCommand.init(dataContainer, orderedUpdatesManager);
             break;
          default:
             ModuleCommandInitializer mci = moduleCommandInitializers.get(c.getCommandId());
@@ -537,13 +567,13 @@ public class CommandsFactoryImpl implements CommandsFactory {
    }
 
    @Override
-   public StateRequestCommand buildStateRequestCommand(StateRequestCommand.Type subtype, Address sender, int viewId, Set<Integer> segments) {
-      return new StateRequestCommand(cacheName, subtype, sender, viewId, segments);
+   public StateRequestCommand buildStateRequestCommand(StateRequestCommand.Type subtype, Address sender, int topologyId, Set<Integer> segments) {
+      return new StateRequestCommand(cacheName, subtype, sender, topologyId, segments);
    }
 
    @Override
-   public StateResponseCommand buildStateResponseCommand(Address sender, int topologyId, Collection<StateChunk> stateChunks) {
-      return new StateResponseCommand(cacheName, sender, topologyId, stateChunks);
+   public StateResponseCommand buildStateResponseCommand(Address sender, int topologyId, Collection<StateChunk> stateChunks, boolean applyState, boolean pushTransfer) {
+      return new StateResponseCommand(cacheName, sender, topologyId, stateChunks, applyState, pushTransfer);
    }
 
    @Override
@@ -579,11 +609,6 @@ public class CommandsFactoryImpl implements CommandsFactory {
    @Override
    public CompleteTransactionCommand buildCompleteTransactionCommand(Xid xid, boolean commit) {
       return new CompleteTransactionCommand(cacheName, xid, commit);
-   }
-
-   @Override
-   public ApplyDeltaCommand buildApplyDeltaCommand(Object deltaAwareValueKey, Delta delta, Collection keys) {
-      return new ApplyDeltaCommand(deltaAwareValueKey, delta, keys, generateUUID(transactional));
    }
 
    @Override
@@ -624,7 +649,7 @@ public class CommandsFactoryImpl implements CommandsFactory {
    }
 
    @Override
-   public GetKeysInGroupCommand buildGetKeysInGroupCommand(long flagsBitSet, String groupName) {
+   public GetKeysInGroupCommand buildGetKeysInGroupCommand(long flagsBitSet, Object groupName) {
       return new GetKeysInGroupCommand(flagsBitSet, groupName).setGroupManager(groupManager);
    }
 
@@ -667,13 +692,13 @@ public class CommandsFactoryImpl implements CommandsFactory {
    }
 
    @Override
-   public <K, V, R> ReadOnlyKeyCommand<K, V, R> buildReadOnlyKeyCommand(K key, Function<ReadEntryView<K, V>, R> f) {
-      return new ReadOnlyKeyCommand<>(key, f);
+   public <K, V, R> ReadOnlyKeyCommand<K, V, R> buildReadOnlyKeyCommand(K key, Function<ReadEntryView<K, V>, R> f, Params params) {
+      return new ReadOnlyKeyCommand<>(key, f, params);
    }
 
    @Override
-   public <K, V, R> ReadOnlyManyCommand<K, V, R> buildReadOnlyManyCommand(Collection<? extends K> keys, Function<ReadEntryView<K, V>, R> f) {
-      return new ReadOnlyManyCommand<>(keys, f);
+   public <K, V, R> ReadOnlyManyCommand<K, V, R> buildReadOnlyManyCommand(Collection<? extends K> keys, Function<ReadEntryView<K, V>, R> f, Params params) {
+      return new ReadOnlyManyCommand<>(keys, f, params);
    }
 
    @Override
@@ -697,6 +722,11 @@ public class CommandsFactoryImpl implements CommandsFactory {
    @Override
    public <K, V, R> ReadWriteManyEntriesCommand<K, V, R> buildReadWriteManyEntriesCommand(Map<? extends K, ? extends V> entries, BiFunction<V, ReadWriteEntryView<K, V>, R> f, Params params) {
       return new ReadWriteManyEntriesCommand<>(entries, f, params, generateUUID(transactional));
+   }
+
+   @Override
+   public InvalidateVersionsCommand buildInvalidateVersionsCommand(Object[] keys, int[] topologyIds, long[] versions, boolean removed) {
+      return new InvalidateVersionsCommand(cacheName, keys, topologyIds, versions, removed);
    }
 
    @Override

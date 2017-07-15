@@ -39,7 +39,7 @@ public class MultipleCachesTest extends SingleCacheManagerTest {
             "   </local-cache>\n" +
             "   <local-cache name=\"indexingenabled\">\n" +
             "      <indexing index=\"LOCAL\" >\n" +
-            "            <property name=\"default.directory_provider\">ram</property>\n" +
+            "            <property name=\"default.directory_provider\">local-heap</property>\n" +
             "            <property name=\"lucene_version\">LUCENE_CURRENT</property>\n" +
             "      </indexing>\n" +
             "   </local-cache>\n" +
@@ -93,14 +93,14 @@ public class MultipleCachesTest extends SingleCacheManagerTest {
       assertEquals(1, cq.getResultSize());
       List<Person> l =  cq.list();
       assertEquals(1, l.size());
-      Person p = (Person) l.get(0);
+      Person p = l.get(0);
       assertEquals("A Person's Name", p.getName());
       assertEquals("A paragraph containing some text", p.getBlurb());
       assertEquals(75, p.getAge());
 
       SearchManager queryFactory = Search.getSearchManager(indexedCache);
       SearchIntegrator searchImpl = queryFactory.unwrap(SearchIntegrator.class);
-      IndexManager[] indexManagers = searchImpl.getIndexBinding(Person.class).getIndexManagers();
+      IndexManager[] indexManagers = searchImpl.getIndexBindings().get(Person.class).getIndexManagers();
       assert indexManagers != null && indexManagers.length == 1;
       DirectoryBasedIndexManager directory = (DirectoryBasedIndexManager)indexManagers[0];
       DirectoryProvider directoryProvider = directory.getDirectoryProvider();

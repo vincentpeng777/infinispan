@@ -14,6 +14,7 @@ import org.infinispan.commons.CacheException;
 import org.infinispan.commons.marshall.MarshallUtil;
 import org.infinispan.distexec.DistributedCallable;
 import org.infinispan.remoting.transport.Address;
+import org.infinispan.scattered.ScatteredStateProvider;
 import org.infinispan.util.ByteString;
 import org.infinispan.commons.util.SmallIntSet;
 import org.infinispan.util.concurrent.CompletableFutures;
@@ -33,8 +34,13 @@ public class StateRequestCommand extends BaseRpcCommand implements TopologyAffec
    public enum Type {
       GET_TRANSACTIONS,
       GET_CACHE_LISTENERS,
+      START_CONSISTENCY_CHECK,
+      CANCEL_CONSISTENCY_CHECK,
+      START_KEYS_TRANSFER,
       START_STATE_TRANSFER,
-      CANCEL_STATE_TRANSFER;
+      CANCEL_STATE_TRANSFER,
+      CONFIRM_REVOKED_SEGMENTS,
+      ;
 
       private static final Type[] CACHED_VALUES = values();
    }
@@ -80,10 +86,19 @@ public class StateRequestCommand extends BaseRpcCommand implements TopologyAffec
                      stateProvider.getTransactionsForSegments(getOrigin(), topologyId, segments);
                return CompletableFuture.completedFuture(transactions);
 
-            case START_STATE_TRANSFER:
-               stateProvider.startOutboundTransfer(getOrigin(), topologyId, segments);
+            case START_CONSISTENCY_CHECK:
+               stateProvider.startOutboundTransfer(getOrigin(), topologyId, segments, false);
                return CompletableFutures.completedNull();
 
+            case START_KEYS_TRANSFER:
+               ((ScatteredStateProvider) stateProvider).startKeysTransfer(segments, getOrigin());
+               return CompletableFutures.completedNull();
+
+            case START_STATE_TRANSFER:
+               stateProvider.startOutboundTransfer(getOrigin(), topologyId, segments, true);
+               return CompletableFutures.completedNull();
+
+            case CANCEL_CONSISTENCY_CHECK:
             case CANCEL_STATE_TRANSFER:
                stateProvider.cancelOutboundTransfer(getOrigin(), topologyId, segments);
                return CompletableFutures.completedNull();
@@ -91,6 +106,10 @@ public class StateRequestCommand extends BaseRpcCommand implements TopologyAffec
             case GET_CACHE_LISTENERS:
                Collection<DistributedCallable> listeners = stateProvider.getClusterListenersToInstall();
                return CompletableFuture.completedFuture(listeners);
+
+            case CONFIRM_REVOKED_SEGMENTS:
+               return ((ScatteredStateProvider) stateProvider)
+                     .confirmRevokedSegments(topologyId).thenApply(nil -> null);
             default:
                throw new CacheException("Unknown state request command type: " + type);
          }
@@ -133,17 +152,22 @@ public class StateRequestCommand extends BaseRpcCommand implements TopologyAffec
       return COMMAND_ID;
    }
 
+
    @Override
    public void writeTo(ObjectOutput output) throws IOException {
       MarshallUtil.marshallEnum(type, output);
       switch (type) {
-         case GET_TRANSACTIONS:
+         case START_CONSISTENCY_CHECK:
+         case CANCEL_CONSISTENCY_CHECK:
+         case START_KEYS_TRANSFER:
          case START_STATE_TRANSFER:
+         case GET_TRANSACTIONS:
          case CANCEL_STATE_TRANSFER:
             output.writeObject(getOrigin());
             MarshallUtil.marshallCollection(segments, output);
             return;
          case GET_CACHE_LISTENERS:
+         case CONFIRM_REVOKED_SEGMENTS:
             return;
          default:
             throw new IllegalStateException("Unknown state request command type: " + type);
@@ -154,13 +178,17 @@ public class StateRequestCommand extends BaseRpcCommand implements TopologyAffec
    public void readFrom(ObjectInput input) throws IOException, ClassNotFoundException {
       type = MarshallUtil.unmarshallEnum(input, ordinal -> Type.CACHED_VALUES[ordinal]);
       switch (type) {
+         case START_CONSISTENCY_CHECK:
+         case CANCEL_CONSISTENCY_CHECK:
+         case START_KEYS_TRANSFER:
+         case START_STATE_TRANSFER:
          case GET_TRANSACTIONS:
          case CANCEL_STATE_TRANSFER:
-         case START_STATE_TRANSFER:
             setOrigin((Address) input.readObject());
             segments = MarshallUtil.unmarshallCollectionUnbounded(input, SmallIntSet::new);
             return;
          case GET_CACHE_LISTENERS:
+         case CONFIRM_REVOKED_SEGMENTS:
             return;
          default:
             throw new IllegalStateException("Unknown state request command type: " + type);

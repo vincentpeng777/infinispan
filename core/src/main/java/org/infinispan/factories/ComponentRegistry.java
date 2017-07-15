@@ -14,12 +14,14 @@ import org.infinispan.commons.CacheConfigurationException;
 import org.infinispan.commons.CacheException;
 import org.infinispan.commons.marshall.StreamingMarshaller;
 import org.infinispan.configuration.cache.Configuration;
+import org.infinispan.conflict.impl.InternalConflictManager;
 import org.infinispan.container.versioning.VersionGenerator;
 import org.infinispan.factories.annotations.Inject;
 import org.infinispan.factories.components.ComponentMetadata;
 import org.infinispan.factories.components.ComponentMetadataRepo;
 import org.infinispan.lifecycle.ComponentStatus;
 import org.infinispan.lifecycle.ModuleLifecycle;
+import org.infinispan.marshall.core.EncoderRegistry;
 import org.infinispan.notifications.cachemanagerlistener.CacheManagerNotifier;
 import org.infinispan.remoting.inboundhandler.PerCacheInboundInvocationHandler;
 import org.infinispan.remoting.responses.ResponseGenerator;
@@ -85,12 +87,12 @@ public class ComponentRegistry extends AbstractComponentRegistry {
          Map<Byte, ModuleCommandInitializer> initializers = globalComponents.getModuleCommandInitializers();
          if (initializers != null && !initializers.isEmpty()) {
             registerNonVolatileComponent(initializers, MODULE_COMMAND_INITIALIZERS);
-            for (ModuleCommandInitializer mci: initializers.values()) registerNonVolatileComponent(mci, mci.getClass());
+            for (ModuleCommandInitializer mci : initializers.values())
+               registerNonVolatileComponent(mci, mci.getClass());
          } else
             registerNonVolatileComponent(
                   Collections.emptyMap(), MODULE_COMMAND_INITIALIZERS);
-      }
-      catch (Exception e) {
+      } catch (Exception e) {
          throw new CacheException("Unable to construct a ComponentRegistry!", e);
       }
    }
@@ -264,6 +266,10 @@ public class ComponentRegistry extends AbstractComponentRegistry {
       return globalComponents.getTimeService();
    }
 
+   public EncoderRegistry getEncoderRegistry() {
+      return getOrCreateComponent(EncoderRegistry.class);
+   }
+
    public String getCacheName() {
       return cacheName;
    }
@@ -295,15 +301,17 @@ public class ComponentRegistry extends AbstractComponentRegistry {
    public CommandsFactory getCommandsFactory() {
       return commandsFactory;
    }
+
    /**
     * Caching shortcut for #getComponent(StateTransferManager.class);
     */
    public StateTransferLock getStateTransferLock() {
       return stateTransferLock;
    }
+
    /**
     * Caching shortcut for #getLocalComponent(VersionGenerator.class)
-     */
+    */
    public VersionGenerator getVersionGenerator() {
       return versionGenerator;
    }
@@ -334,6 +342,7 @@ public class ComponentRegistry extends AbstractComponentRegistry {
       versionGenerator = getOrCreateComponent(VersionGenerator.class);
       getOrCreateComponent(ClusterCacheStats.class);  //no need to save ref to a field, just initialize component
       getOrCreateComponent(CacheConfigurationMBean.class);
+      getOrCreateComponent(InternalConflictManager.class);
    }
 
    @Override

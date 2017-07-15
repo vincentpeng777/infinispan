@@ -5,7 +5,7 @@
     <parent>
        <groupId>org.infinispan</groupId>
        <artifactId>infinispan-parent</artifactId>
-       <version>9.0.1-SNAPSHOT</version>
+       <version>9.1.1-SNAPSHOT</version>
        <relativePath>../../parent/pom.xml</relativePath>
    </parent>
 
@@ -16,7 +16,9 @@
     <properties>
         
         
-        <overriden.version.junit>4.12</overriden.version.junit>
+        <overridden.version.junit>4.12</overridden.version.junit>
+        
+        <overridden.version.mockito>1.10.19</overridden.version.mockito>
     </properties>
 
     <dependencyManagement>
@@ -69,6 +71,11 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <groupId>org.infinispan</groupId>
+            <artifactId>infinispan-commons-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>${project.groupId}</groupId>
             <artifactId>infinispan-client-hotrod</artifactId>
             <scope>test</scope>
@@ -89,7 +96,13 @@
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
             <scope>test</scope>
-            <version>${overriden.version.junit}</version>
+            <version>${overridden.version.junit}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <scope>test</scope>
+            <version>${overridden.version.mockito}</version>
         </dependency>
     </dependencies>
 
@@ -125,6 +138,7 @@
                         <build.directory>${project.build.directory}</build.directory>
                     </systemPropertyVariables>
                     <trimStackTrace>false</trimStackTrace>
+                    <argLine>${forkJvmArgs} ${jigsawForkJvmArgs}</argLine>
                 </configuration>
                 <dependencies>
                     <dependency>

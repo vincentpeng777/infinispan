@@ -16,6 +16,8 @@ import org.infinispan.commands.tx.CommitCommand;
 import org.infinispan.commands.tx.PrepareCommand;
 import org.infinispan.commands.tx.RollbackCommand;
 import org.infinispan.commands.write.ClearCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.PutMapCommand;
 import org.infinispan.commands.write.RemoveCommand;
@@ -99,27 +101,46 @@ public abstract class BaseBackupReceiver implements BackupReceiver {
       public Object visitPutKeyValueCommand(InvocationContext ctx, PutKeyValueCommand command) throws Throwable {
          log.tracef("Processing a remote put %s", command);
          if (command.isConditional()) {
-            return backupCache.putIfAbsent(command.getKey(), command.getValue(), command.getMetadata());
+            backupCache.putIfAbsent(command.getKey(), command.getValue(), command.getMetadata());
+         } else {
+            backupCache.put(command.getKey(), command.getValue(), command.getMetadata());
          }
-         return backupCache.put(command.getKey(), command.getValue(), command.getMetadata());
+         return null;
       }
 
       @Override
       public Object visitRemoveCommand(InvocationContext ctx, RemoveCommand command) throws Throwable {
          if (command.isConditional()) {
-            return backupCache.remove(command.getKey(), command.getValue());
+            backupCache.remove(command.getKey(), command.getValue());
+         } else {
+            backupCache.remove(command.getKey());
          }
-         return backupCache.remove(command.getKey());
+         return null;
       }
 
       @Override
       public Object visitReplaceCommand(InvocationContext ctx, ReplaceCommand command) throws Throwable {
          if (command.isConditional() && command.getOldValue() != null) {
-            return backupCache.replace(command.getKey(), command.getOldValue(), command.getNewValue(),
+            backupCache.replace(command.getKey(), command.getOldValue(), command.getNewValue(),
                                        command.getMetadata());
+         } else {
+            backupCache.replace(command.getKey(), command.getNewValue(),
+                                command.getMetadata());
          }
-         return backupCache.replace(command.getKey(), command.getNewValue(),
-                                    command.getMetadata());
+         return null;
+      }
+
+      @Override
+      public Object visitComputeCommand(InvocationContext ctx, ComputeCommand command) throws Throwable {
+         if (command.isConditional()) {
+            return backupCache.computeIfPresent(command.getKey(), command.getRemappingBiFunction(), command.getMetadata());
+         }
+         return backupCache.compute(command.getKey(), command.getRemappingBiFunction(), command.getMetadata());
+      }
+
+      @Override
+      public Object visitComputeIfAbsentCommand(InvocationContext ctx, ComputeIfAbsentCommand command) throws Throwable {
+         return backupCache.computeIfAbsent(command.getKey(), command.getMappingFunction(), command.getMetadata());
       }
 
       @Override

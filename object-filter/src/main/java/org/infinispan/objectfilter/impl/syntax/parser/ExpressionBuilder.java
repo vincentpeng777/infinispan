@@ -67,7 +67,7 @@ final class ExpressionBuilder<TypeMetadata> {
       push(new FullTextRegexpExpr(makePropertyValueExpr(propertyPath), regexp));
    }
 
-   public void addFullTextRange(PropertyPath<?> propertyPath, boolean includeLower, String lower, String upper, boolean includeUpper) {
+   public void addFullTextRange(PropertyPath<?> propertyPath, boolean includeLower, Object lower, Object upper, boolean includeUpper) {
       push(new FullTextRangeExpr(makePropertyValueExpr(propertyPath), includeLower, lower, upper, includeUpper));
    }
 
@@ -93,7 +93,7 @@ final class ExpressionBuilder<TypeMetadata> {
       push(new OrExpr(children));
    }
 
-   public void addLike(PropertyPath<?> propertyPath, String patternValue, Character escapeCharacter) {
+   public void addLike(PropertyPath<?> propertyPath, Object patternValue, Character escapeCharacter) {
       // TODO [anistor] escapeCharacter is ignored for now
       push(new LikeExpr(makePropertyValueExpr(propertyPath), patternValue));
    }

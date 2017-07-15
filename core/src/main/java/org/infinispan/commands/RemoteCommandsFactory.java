@@ -38,12 +38,14 @@ import org.infinispan.commands.tx.totalorder.TotalOrderNonVersionedPrepareComman
 import org.infinispan.commands.tx.totalorder.TotalOrderRollbackCommand;
 import org.infinispan.commands.tx.totalorder.TotalOrderVersionedCommitCommand;
 import org.infinispan.commands.tx.totalorder.TotalOrderVersionedPrepareCommand;
-import org.infinispan.commands.write.ApplyDeltaCommand;
 import org.infinispan.commands.write.BackupPutMapRpcCommand;
 import org.infinispan.commands.write.BackupWriteRpcCommand;
 import org.infinispan.commands.write.ClearCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.InvalidateCommand;
 import org.infinispan.commands.write.InvalidateL1Command;
+import org.infinispan.commands.write.InvalidateVersionsCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.PutMapCommand;
 import org.infinispan.commands.write.RemoveCommand;
@@ -123,6 +125,12 @@ public class RemoteCommandsFactory {
             case ReplaceCommand.COMMAND_ID:
                command = new ReplaceCommand();
                break;
+            case ComputeCommand.COMMAND_ID:
+               command = new ComputeCommand();
+               break;
+            case ComputeIfAbsentCommand.COMMAND_ID:
+               command = new ComputeIfAbsentCommand();
+               break;
             case GetKeyValueCommand.COMMAND_ID:
                command = new GetKeyValueCommand();
                break;
@@ -134,9 +142,6 @@ public class RemoteCommandsFactory {
                break;
             case InvalidateL1Command.COMMAND_ID:
                command = new InvalidateL1Command();
-               break;
-            case ApplyDeltaCommand.COMMAND_ID:
-               command = new ApplyDeltaCommand();
                break;
             case CacheTopologyControlCommand.COMMAND_ID:
                command = new CacheTopologyControlCommand();
@@ -315,6 +320,9 @@ public class RemoteCommandsFactory {
                break;
             case BackupPutMapRpcCommand.COMMAND_ID:
                command = new BackupPutMapRpcCommand(cacheName);
+               break;
+            case InvalidateVersionsCommand.COMMAND_ID:
+               command = new InvalidateVersionsCommand(cacheName);
                break;
             default:
                throw new CacheException("Unknown command id " + id + "!");

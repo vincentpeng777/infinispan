@@ -20,7 +20,6 @@ import java.util.function.Function;
 import javax.transaction.xa.Xid;
 
 import org.infinispan.Cache;
-import org.infinispan.atomic.Delta;
 import org.infinispan.commands.CancelCommand;
 import org.infinispan.commands.CommandsFactory;
 import org.infinispan.commands.CreateCacheCommand;
@@ -57,23 +56,25 @@ import org.infinispan.commands.tx.PrepareCommand;
 import org.infinispan.commands.tx.RollbackCommand;
 import org.infinispan.commands.tx.VersionedCommitCommand;
 import org.infinispan.commands.tx.VersionedPrepareCommand;
-import org.infinispan.commands.write.ApplyDeltaCommand;
 import org.infinispan.commands.write.BackupAckCommand;
 import org.infinispan.commands.write.BackupMultiKeyAckCommand;
 import org.infinispan.commands.write.BackupPutMapRpcCommand;
 import org.infinispan.commands.write.BackupWriteRpcCommand;
 import org.infinispan.commands.write.ClearCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.DataWriteCommand;
 import org.infinispan.commands.write.EvictCommand;
 import org.infinispan.commands.write.ExceptionAckCommand;
 import org.infinispan.commands.write.InvalidateCommand;
+import org.infinispan.commands.write.InvalidateVersionsCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.PutMapCommand;
 import org.infinispan.commands.write.RemoveCommand;
 import org.infinispan.commands.write.RemoveExpiredCommand;
 import org.infinispan.commands.write.ReplaceCommand;
 import org.infinispan.commands.write.WriteCommand;
-import org.infinispan.commons.api.functional.EntryView;
+import org.infinispan.functional.EntryView;
 import org.infinispan.factories.ComponentRegistry;
 import org.infinispan.functional.impl.Params;
 import org.infinispan.manager.EmbeddedCacheManager;
@@ -192,6 +193,16 @@ public class ControlledCommandFactory implements CommandsFactory {
    }
 
    @Override
+   public ComputeCommand buildComputeCommand(Object key, BiFunction mappingFunction, boolean computeIfPresent, Metadata metadata, long flagsBitSet) {
+      return actual.buildComputeCommand(key, mappingFunction, computeIfPresent, metadata, flagsBitSet);
+   }
+
+   @Override
+   public ComputeIfAbsentCommand buildComputeIfAbsentCommand(Object key, Function mappingFunction, Metadata metadata, long flagsBitSet) {
+      return actual.buildComputeIfAbsentCommand(key, mappingFunction, metadata, flagsBitSet);
+   }
+
+   @Override
    public SizeCommand buildSizeCommand(long flagsBitSet) {
       return actual.buildSizeCommand(flagsBitSet);
    }
@@ -287,13 +298,13 @@ public class ControlledCommandFactory implements CommandsFactory {
    }
 
    @Override
-   public StateRequestCommand buildStateRequestCommand(StateRequestCommand.Type subtype, Address sender, int viewId, Set<Integer> segments) {
-      return actual.buildStateRequestCommand(subtype, sender, viewId, segments);
+   public StateRequestCommand buildStateRequestCommand(StateRequestCommand.Type subtype, Address sender, int topologyId, Set<Integer> segments) {
+      return actual.buildStateRequestCommand(subtype, sender, topologyId, segments);
    }
 
    @Override
-   public StateResponseCommand buildStateResponseCommand(Address sender, int topologyId, Collection<StateChunk> stateChunks) {
-      return actual.buildStateResponseCommand(sender, topologyId, stateChunks);
+   public StateResponseCommand buildStateResponseCommand(Address sender, int viewId, Collection<StateChunk> stateChunks, boolean applyState, boolean pushTransfer) {
+      return actual.buildStateResponseCommand(sender, viewId, stateChunks, applyState, pushTransfer);
    }
 
    @Override
@@ -329,11 +340,6 @@ public class ControlledCommandFactory implements CommandsFactory {
    @Override
    public TxCompletionNotificationCommand buildTxCompletionNotificationCommand(long internalId) {
       return actual.buildTxCompletionNotificationCommand(internalId);
-   }
-
-   @Override
-   public ApplyDeltaCommand buildApplyDeltaCommand(Object deltaAwareValueKey, Delta delta, Collection keys) {
-      return actual.buildApplyDeltaCommand(deltaAwareValueKey, delta, keys);
    }
 
    @Override
@@ -374,7 +380,7 @@ public class ControlledCommandFactory implements CommandsFactory {
    }
 
    @Override
-   public GetKeysInGroupCommand buildGetKeysInGroupCommand(long flagsBitSet, String groupName) {
+   public GetKeysInGroupCommand buildGetKeysInGroupCommand(long flagsBitSet, Object groupName) {
       return actual.buildGetKeysInGroupCommand(flagsBitSet, groupName);
    }
 
@@ -398,13 +404,13 @@ public class ControlledCommandFactory implements CommandsFactory {
    }
 
    @Override
-   public <K, V, R> ReadOnlyKeyCommand<K, V, R> buildReadOnlyKeyCommand(K key, Function<EntryView.ReadEntryView<K, V>, R> f) {
-      return actual.buildReadOnlyKeyCommand(key, f);
+   public <K, V, R> ReadOnlyKeyCommand<K, V, R> buildReadOnlyKeyCommand(K key, Function<EntryView.ReadEntryView<K, V>, R> f, Params params) {
+      return actual.buildReadOnlyKeyCommand(key, f, params);
    }
 
    @Override
-   public <K, V, R> ReadOnlyManyCommand<K, V, R> buildReadOnlyManyCommand(Collection<? extends K> keys, Function<EntryView.ReadEntryView<K, V>, R> f) {
-      return actual.buildReadOnlyManyCommand(keys, f);
+   public <K, V, R> ReadOnlyManyCommand<K, V, R> buildReadOnlyManyCommand(Collection<? extends K> keys, Function<EntryView.ReadEntryView<K, V>, R> f, Params params) {
+      return actual.buildReadOnlyManyCommand(keys, f, params);
    }
 
    @Override
@@ -472,4 +478,10 @@ public class ControlledCommandFactory implements CommandsFactory {
    public BackupPutMapRpcCommand buildBackupPutMapRpcCommand(PutMapCommand command) {
       return actual.buildBackupPutMapRpcCommand(command);
    }
+
+   @Override
+   public InvalidateVersionsCommand buildInvalidateVersionsCommand(Object[] keys, int[] topologyIds, long[] versions, boolean removed) {
+      return actual.buildInvalidateVersionsCommand(keys, topologyIds, versions, removed);
+   }
+
 }

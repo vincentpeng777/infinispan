@@ -1,8 +1,6 @@
 package org.infinispan.interceptors.distribution;
 
 import static java.lang.String.format;
-import static org.infinispan.util.DeltaCompositeKeyUtil.filterDeltaCompositeKeys;
-import static org.infinispan.util.DeltaCompositeKeyUtil.getAffectedKeysFromContext;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -34,20 +32,21 @@ import org.infinispan.commands.functional.WriteOnlyKeyCommand;
 import org.infinispan.commands.functional.WriteOnlyKeyValueCommand;
 import org.infinispan.commands.functional.WriteOnlyManyCommand;
 import org.infinispan.commands.functional.WriteOnlyManyEntriesCommand;
-import org.infinispan.commands.read.GetAllCommand;
 import org.infinispan.commands.tx.CommitCommand;
 import org.infinispan.commands.tx.PrepareCommand;
 import org.infinispan.commands.tx.RollbackCommand;
 import org.infinispan.commands.tx.TransactionBoundaryCommand;
 import org.infinispan.commands.tx.VersionedCommitCommand;
 import org.infinispan.commands.write.AbstractDataWriteCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.PutMapCommand;
 import org.infinispan.commands.write.RemoveCommand;
 import org.infinispan.commands.write.ReplaceCommand;
 import org.infinispan.commands.write.ValueMatcher;
 import org.infinispan.commands.write.WriteCommand;
-import org.infinispan.commons.api.functional.EntryView;
+import org.infinispan.functional.EntryView;
 import org.infinispan.container.entries.CacheEntry;
 import org.infinispan.container.entries.MVCCEntry;
 import org.infinispan.container.versioning.EntryVersionsMap;
@@ -84,6 +83,7 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
 
    private static final Log log = LogFactory.getLog(TxDistributionInterceptor.class);
    private static final boolean trace = log.isTraceEnabled();
+   private static final long SKIP_REMOTE_FLAGS = FlagBitSets.CACHE_MODE_LOCAL | FlagBitSets.SKIP_REMOTE_LOOKUP;
 
    private PartitionHandlingManager partitionHandlingManager;
 
@@ -98,6 +98,22 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
 
    @Override
    public Object visitReplaceCommand(InvocationContext ctx, ReplaceCommand command) throws Throwable {
+      return handleTxWriteCommand(ctx, command, command.getKey());
+   }
+
+   @Override
+   public Object visitComputeCommand(InvocationContext ctx, ComputeCommand command) throws Throwable {
+      // Contrary to functional commands, compute() needs to return the new value returned by the remapping function.
+      // Since we can assume that old and new values are comparable in size, fetching old value into context is acceptable
+      // and it is more efficient in case that we execute more subsequent modifications than sending the return value.
+      return handleTxWriteCommand(ctx, command, command.getKey());
+   }
+
+   @Override
+   public Object visitComputeIfAbsentCommand(InvocationContext ctx, ComputeIfAbsentCommand command) throws Throwable {
+      // Contrary to functional commands, compute() needs to return the new value returned by the remapping function.
+      // Since we can assume that old and new values are comparable in size, fetching old value into context is acceptable
+      // and it is more efficient in case that we execute more subsequent modifications than sending the return value.
       return handleTxWriteCommand(ctx, command, command.getKey());
    }
 
@@ -132,9 +148,7 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
          throws Throwable {
       if (ctx.isOriginLocal()) {
          TxInvocationContext<LocalTransaction> localTxCtx = (TxInvocationContext<LocalTransaction>) ctx;
-         //In Pessimistic mode, the delta composite keys were sent to the wrong owner and never locked.
-         Collection<Address> affectedNodes =
-               dm.getCacheTopology().getWriteOwners(filterDeltaCompositeKeys(command.getKeys()));
+         Collection<Address> affectedNodes = dm.getCacheTopology().getWriteOwners(command.getKeys());
          Collection<Address> recipients = isReplicated ? null : affectedNodes;
          localTxCtx.getCacheTransaction().locksAcquired(affectedNodes);
          log.tracef("Registered remote locks acquired %s", affectedNodes);
@@ -217,15 +231,14 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
          }
 
          TxInvocationContext<LocalTransaction> localTxCtx = (TxInvocationContext<LocalTransaction>) rCtx;
-         Collection<Address> affectedNodes =
-               dm.getCacheTopology().getWriteOwners(getAffectedKeysFromContext(localTxCtx));
-         Collection<Address> recipients = isReplicated ? null : affectedNodes;
+         LocalTransaction localTx = localTxCtx.getCacheTransaction();
+         LocalizedCacheTopology cacheTopology =
+               dm.getCacheTopology();
+         Collection<Address> writeOwners = cacheTopology.getWriteOwners(localTxCtx.getAffectedKeys());
+         localTx.locksAcquired(writeOwners);Collection<Address> recipients = isReplicated ? null : localTx.getCommitNodes(writeOwners, cacheTopology);
          CompletableFuture<Object> remotePrepare =
                prepareOnAffectedNodes(localTxCtx, (PrepareCommand) rCommand, recipients);
-         return asyncValue(remotePrepare.thenApply(o -> {
-            localTxCtx.getCacheTransaction().locksAcquired(affectedNodes);
-            return o;
-         }));
+         return asyncValue(remotePrepare);
       });
    }
 
@@ -271,21 +284,21 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
       LocalTransaction localTx = (LocalTransaction) ctx.getCacheTransaction();
       LocalizedCacheTopology cacheTopology = dm.getCacheTopology();
       Collection<Address> affectedNodes =
-            isReplicated ? null : cacheTopology.getWriteOwners(getAffectedKeysFromContext(ctx));
+            isReplicated ? null : cacheTopology.getWriteOwners(ctx.getAffectedKeys());
       return localTx.getCommitNodes(affectedNodes, cacheTopology);
    }
 
    protected void checkTxCommandResponses(Map<Address, Response> responseMap,
          TransactionBoundaryCommand command, TxInvocationContext<LocalTransaction> context,
          Collection<Address> recipients) {
-      OutdatedTopologyException outdatedTopologyException = null;
+      LocalizedCacheTopology cacheTopology = checkTopologyId(command);
       for (Map.Entry<Address, Response> e : responseMap.entrySet()) {
          Address recipient = e.getKey();
          Response response = e.getValue();
          if (response == CacheNotFoundResponse.INSTANCE) {
-            // No need to retry if the missing node wasn't a member when the command started.
-            if (command.getTopologyId() == stateTransferManager.getCacheTopology().getTopologyId()
-                  && !rpcManager.getMembers().contains(recipient)) {
+            // Prepare/Commit commands are sent to all affected nodes, including the ones that left the cluster.
+            // We must not register a partial commit when receiving a CacheNotFoundResponse from one of those.
+            if (!cacheTopology.getMembers().contains(recipient)) {
                if (trace) log.tracef("Ignoring response from node not targeted %s", recipient);
             } else {
                if (checkCacheNotFoundResponseInPartitionHandling(command, context, recipients)) {
@@ -293,18 +306,13 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
                   return;
                } else {
                   if (trace) log.tracef("Cache not running on node %s, or the node is missing", recipient);
-                  //noinspection ThrowableInstanceNeverThrown
-                  outdatedTopologyException = new OutdatedTopologyException(format("Cache not running on node %s, or the node is missing", recipient));
+                  throw OutdatedTopologyException.INSTANCE;
                }
             }
          } else if (response == UnsureResponse.INSTANCE) {
             if (trace) log.tracef("Node %s has a newer topology id", recipient);
-            //noinspection ThrowableInstanceNeverThrown
-            outdatedTopologyException = new OutdatedTopologyException(format("Node %s has a newer topology id", recipient));
+            throw OutdatedTopologyException.INSTANCE;
          }
-      }
-      if (outdatedTopologyException != null) {
-         throw outdatedTopologyException;
       }
    }
 
@@ -365,14 +373,14 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
    protected <C extends TopologyAffectedCommand & FlagAffectedCommand, K, V> Object
          handleTxWriteManyEntriesCommand(InvocationContext ctx, C command, Map<K, V> entries,
                                   BiFunction<C, Map<K, V>, C> copyCommand) {
+      boolean ignorePreviousValue = command.hasAnyFlag(SKIP_REMOTE_FLAGS) || command.loadType() == VisitableCommand.LoadType.DONT_LOAD;
       Map<K, V> filtered = new HashMap<>(entries.size());
       Collection<CompletableFuture<?>> remoteGets = null;
       for (Map.Entry<K, V> e : entries.entrySet()) {
          K key = e.getKey();
          if (ctx.isOriginLocal() || dm.getCacheTopology().isWriteOwner(key)) {
             if (ctx.lookupEntry(key) == null) {
-               if (command.hasAnyFlag(FlagBitSets.CACHE_MODE_LOCAL) || command.hasAnyFlag(
-                     FlagBitSets.SKIP_REMOTE_LOOKUP) || !needsPreviousValue(ctx, command)) {
+               if (ignorePreviousValue) {
                   entryFactory.wrapExternalEntry(ctx, key, null, false, true);
                } else {
                   if (remoteGets == null) {
@@ -384,26 +392,30 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
             filtered.put(key, e.getValue());
          }
       }
-      C narrowed = copyCommand.apply(command, filtered);
-      if (remoteGets != null) {
-         return asyncInvokeNext(ctx, narrowed, CompletableFuture.allOf(remoteGets.toArray(new CompletableFuture[remoteGets.size()])));
-      } else {
-         return invokeNext(ctx, narrowed);
-      }
+      return asyncInvokeNext(ctx, copyCommand.apply(command, filtered), remoteGets);
    }
 
-   protected <C extends VisitableCommand & FlagAffectedCommand, K> Object handleTxWriteManyCommand(
+   protected <C extends VisitableCommand & FlagAffectedCommand & TopologyAffectedCommand, K> Object handleTxWriteManyCommand(
          InvocationContext ctx, C command, Collection<K> keys, BiFunction<C, List<K>, C> copyCommand) {
-         List<K> filtered = new ArrayList<>(keys.size());
+      boolean ignorePreviousValue = command.hasAnyFlag(SKIP_REMOTE_FLAGS) || command.loadType() == VisitableCommand.LoadType.DONT_LOAD;
+      List<K> filtered = new ArrayList<>(keys.size());
+      List<CompletableFuture<?>> remoteGets = null;
       for (K key : keys) {
          if (ctx.isOriginLocal() || dm.getCacheTopology().isWriteOwner(key)) {
             if (ctx.lookupEntry(key) == null) {
-               entryFactory.wrapExternalEntry(ctx, key, null, false, true);
+               if (ignorePreviousValue) {
+                  entryFactory.wrapExternalEntry(ctx, key, null, false, true);
+               } else {
+                  if (remoteGets == null) {
+                     remoteGets = new ArrayList<>();
+                  }
+                  remoteGets.add(remoteGet(ctx, command, key, true));
+               }
             }
             filtered.add(key);
          }
       }
-      return invokeNext(ctx, copyCommand.apply(command, filtered));
+      return asyncInvokeNext(ctx, copyCommand.apply(command, filtered), remoteGets);
    }
 
    public <C extends AbstractDataWriteCommand & FunctionalCommand> Object handleTxFunctionalCommand(InvocationContext ctx, C command) {
@@ -411,8 +423,7 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
       if (ctx.isOriginLocal()) {
          CacheEntry entry = ctx.lookupEntry(key);
          if (entry == null) {
-            if (isLocalModeForced(command) || command.hasAnyFlag(FlagBitSets.SKIP_REMOTE_LOOKUP)
-                  || command.loadType() == VisitableCommand.LoadType.DONT_LOAD) {
+            if (command.hasAnyFlag(SKIP_REMOTE_FLAGS)|| command.loadType() == VisitableCommand.LoadType.DONT_LOAD) {
                entryFactory.wrapExternalEntry(ctx, key, null, false, true);
                return invokeNext(ctx, command);
             } else {
@@ -423,7 +434,7 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
                mutationsOnKey.add(command.toMutation(key));
                TxReadOnlyKeyCommand remoteRead = new TxReadOnlyKeyCommand(key, mutationsOnKey);
 
-               return asyncValue(rpcManager.invokeRemotelyAsync(owners, remoteRead, staggeredOptions).thenApply(responses -> {
+               return asyncValue(rpcManager.invokeRemotelyAsync(owners, remoteRead, getStaggeredOptions(owners.size())).thenApply(responses -> {
                   for (Response r : responses.values()) {
                      if (r instanceof SuccessfulResponse) {
                         SuccessfulResponse response = (SuccessfulResponse) r;
@@ -431,12 +442,7 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
                         return unwrapFunctionalResultOnOrigin(ctx, command.getKey(), responseValue);
                      }
                   }
-                  // If this node has topology higher than some of the nodes and the nodes could not respond
-                  // with the remote entry, these nodes are blocking the response and therefore we can get only timeouts.
-                  // Therefore, if we got here it means that we have lower topology than some other nodes and we can wait
-                  // for it in StateTransferInterceptor and retry the read later.
-                  // TODO: These situations won't happen as soon as we'll implement 4-phase topology change in ISPN-5021
-                  throw new OutdatedTopologyException("Did not get any successful response, got " + responses);
+                  throw handleMissingSuccessfulResponse(responses);
                }));
             }
          }
@@ -448,7 +454,12 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
          }
          CacheEntry entry = ctx.lookupEntry(key);
          if (entry == null) {
-            return handleMissingEntryOnRead(command);
+            if (command.hasAnyFlag(SKIP_REMOTE_FLAGS) || command.loadType() == VisitableCommand.LoadType.DONT_LOAD) {
+               // in transactional mode, we always need the entry wrapped
+               entryFactory.wrapExternalEntry(ctx, key, null, false, true);
+            } else {
+               return asyncInvokeNext(ctx, command, remoteGet(ctx, command, command.getKey(), true));
+            }
          }
          return invokeNextThenApply(ctx, command, (rCtx, rCommand, rv) ->
                wrapFunctionalResultOnNonOriginOnReturn(rv, entry));
@@ -506,34 +517,28 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
    }
 
    @Override
-   protected CompletableFuture<Void> remoteGetAll(InvocationContext ctx, GetAllCommand command, Map<Address, List<Object>> requestedKeys) {
-      CompletableFuture<Void> cf = super.remoteGetAll(ctx, command, requestedKeys);
+   protected void handleRemotelyRetrievedKeys(InvocationContext ctx, List<?> remoteKeys) {
       if (!ctx.isInTxScope()) {
-         return cf;
+         return;
       }
-      for (List<Object> keys : requestedKeys.values()) {
-         List<List<Mutation>> mutations = getMutations(ctx, keys);
-         if (mutations == null || mutations.isEmpty()) {
-            continue;
+      List<List<Mutation>> mutations = getMutations(ctx, remoteKeys);
+      if (mutations == null || mutations.isEmpty()) {
+         return;
+      }
+      Iterator<?> keysIterator = remoteKeys.iterator();
+      Iterator<List<Mutation>> mutationsIterator = mutations.iterator();
+      for (; keysIterator.hasNext() && mutationsIterator.hasNext(); ) {
+         Object key = keysIterator.next();
+         entryFactory.wrapEntryForWriting(ctx, key, false, true);
+         MVCCEntry cacheEntry = (MVCCEntry) ctx.lookupEntry(key);
+         EntryView.ReadWriteEntryView readWriteEntryView = EntryViews.readWrite(cacheEntry);
+         for (Mutation mutation : mutationsIterator.next()) {
+            mutation.apply(readWriteEntryView);
+            cacheEntry.updatePreviousValue();
          }
-         cf = cf.thenRun(() -> {
-            Iterator<Object> keysIterator = keys.iterator();
-            Iterator<List<Mutation>> mutationsIterator = mutations.iterator();
-            for (; keysIterator.hasNext() && mutationsIterator.hasNext(); ) {
-               Object key = keysIterator.next();
-               entryFactory.wrapEntryForWriting(ctx, key, false, true);
-               MVCCEntry cacheEntry = (MVCCEntry) ctx.lookupEntry(key);
-               EntryView.ReadWriteEntryView readWriteEntryView = EntryViews.readWrite(cacheEntry);
-               for (Mutation mutation : mutationsIterator.next()) {
-                  mutation.apply(readWriteEntryView);
-                  cacheEntry.updatePreviousValue();
-               }
-            }
-            assert !keysIterator.hasNext();
-            assert !mutationsIterator.hasNext();
-         });
       }
-      return cf;
+      assert !keysIterator.hasNext();
+      assert !mutationsIterator.hasNext();
    }
 
    protected RpcOptions createRpcOptions() {
@@ -558,10 +563,11 @@ public class TxDistributionInterceptor extends BaseDistributionInterceptor {
       return mutations;
    }
 
-   private static List<List<Mutation>> getMutations(InvocationContext ctx, List<Object> keys) {
+   private static List<List<Mutation>> getMutations(InvocationContext ctx, List<?> keys) {
       if (!ctx.isInTxScope()) {
          return null;
       }
+      log.tracef("Looking up mutations for %s", keys);
       TxInvocationContext txCtx = (TxInvocationContext) ctx;
       List<List<Mutation>> mutations = new ArrayList<>(keys.size());
       for (int i = keys.size(); i > 0; --i) mutations.add(Collections.emptyList());

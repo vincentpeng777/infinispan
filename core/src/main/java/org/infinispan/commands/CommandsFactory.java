@@ -54,19 +54,22 @@ import org.infinispan.commands.write.BackupMultiKeyAckCommand;
 import org.infinispan.commands.write.BackupPutMapRpcCommand;
 import org.infinispan.commands.write.BackupWriteRpcCommand;
 import org.infinispan.commands.write.ClearCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.DataWriteCommand;
 import org.infinispan.commands.write.EvictCommand;
 import org.infinispan.commands.write.ExceptionAckCommand;
 import org.infinispan.commands.write.InvalidateCommand;
+import org.infinispan.commands.write.InvalidateVersionsCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.PutMapCommand;
 import org.infinispan.commands.write.RemoveCommand;
 import org.infinispan.commands.write.RemoveExpiredCommand;
 import org.infinispan.commands.write.ReplaceCommand;
 import org.infinispan.commands.write.WriteCommand;
-import org.infinispan.commons.api.functional.EntryView.ReadEntryView;
-import org.infinispan.commons.api.functional.EntryView.ReadWriteEntryView;
-import org.infinispan.commons.api.functional.EntryView.WriteEntryView;
+import org.infinispan.functional.EntryView.ReadEntryView;
+import org.infinispan.functional.EntryView.ReadWriteEntryView;
+import org.infinispan.functional.EntryView.WriteEntryView;
 import org.infinispan.factories.scopes.Scope;
 import org.infinispan.factories.scopes.Scopes;
 import org.infinispan.functional.impl.Params;
@@ -157,6 +160,28 @@ public interface CommandsFactory {
     * @return a ReplaceCommand
     */
    ReplaceCommand buildReplaceCommand(Object key, Object oldValue, Object newValue, Metadata metadata, long flagsBitSet);
+
+
+   /**
+    * Builds a ComputeCommand
+    * @param key key to compute if this key is absent
+    * @param mappingFunction BiFunction for the key and the value
+    * @param computeIfPresent flag to apply as computeIfPresent mode
+    * @param metadata metadata of entry
+    * @param flagsBitSet Command flags provided by cache
+    * @return a ComputeCommand
+    */
+   ComputeCommand buildComputeCommand(Object key, BiFunction mappingFunction, boolean computeIfPresent, Metadata metadata, long flagsBitSet);
+
+   /**
+    * Builds a ComputeIfAbsentCommand
+    * @param key key to compute if this key is absent
+    * @param mappingFunction mappingFunction for the key
+    * @param metadata metadata of entry
+    * @param flagsBitSet Command flags provided by cache
+    * @return a ComputeCommand
+    */
+   ComputeIfAbsentCommand buildComputeIfAbsentCommand(Object key, Function mappingFunction, Metadata metadata, long flagsBitSet);
 
    /**
     * Builds a SizeCommand
@@ -333,12 +358,12 @@ public interface CommandsFactory {
    /**
     * Builds a StateRequestCommand used for requesting transactions and locks and for starting or canceling transfer of cache entries.
     */
-   StateRequestCommand buildStateRequestCommand(StateRequestCommand.Type subtype, Address sender, int viewId, Set<Integer> segments);
+   StateRequestCommand buildStateRequestCommand(StateRequestCommand.Type subtype, Address sender, int topologyId, Set<Integer> segments);
 
    /**
     * Builds a StateResponseCommand used for pushing cache entries to another node in response to a StateRequestCommand.
     */
-   StateResponseCommand buildStateResponseCommand(Address sender, int viewId, Collection<StateChunk> stateChunks);
+   StateResponseCommand buildStateResponseCommand(Address sender, int viewId, Collection<StateChunk> stateChunks, boolean applyState, boolean pushTransfer);
 
    /**
     * Retrieves the cache name this CommandFactory is set up to construct commands for.
@@ -390,8 +415,12 @@ public interface CommandsFactory {
     *
     * @return ApplyDeltaCommand instance
     * @see ApplyDeltaCommand
+    * @deprecated since 9.1
     */
-   ApplyDeltaCommand buildApplyDeltaCommand(Object deltaAwareValueKey, Delta delta, Collection keys);
+   @Deprecated
+   default ApplyDeltaCommand buildApplyDeltaCommand(Object deltaAwareValueKey, Delta delta, Collection keys) {
+      throw new UnsupportedOperationException();
+   }
 
    /**
     * Same as {@code buildCreateCacheCommand(cacheName, cacheConfigurationName, false, 0)}.
@@ -452,7 +481,7 @@ public interface CommandsFactory {
     * @param groupName the group name.
     * @return the GetKeysInGroup created.
     */
-   GetKeysInGroupCommand buildGetKeysInGroupCommand(long flagsBitSet, String groupName);
+   GetKeysInGroupCommand buildGetKeysInGroupCommand(long flagsBitSet, Object groupName);
 
    <K> StreamRequestCommand<K> buildStreamRequestCommand(Object id, boolean parallelStream, StreamRequestCommand.Type type,
            Set<Integer> segments, Set<K> keys, Set<K> excludedKeys, boolean includeLoader, Object terminalOperation);
@@ -470,9 +499,9 @@ public interface CommandsFactory {
    <R> StreamResponseCommand<R> buildStreamResponseCommand(Object identifier, boolean complete, Set<Integer> lostSegments,
            R response);
 
-   <K, V, R> ReadOnlyKeyCommand<K, V, R> buildReadOnlyKeyCommand(K key, Function<ReadEntryView<K, V>, R> f);
+   <K, V, R> ReadOnlyKeyCommand<K, V, R> buildReadOnlyKeyCommand(K key, Function<ReadEntryView<K, V>, R> f, Params params);
 
-   <K, V, R> ReadOnlyManyCommand<K, V, R> buildReadOnlyManyCommand(Collection<? extends K> keys, Function<ReadEntryView<K, V>, R> f);
+   <K, V, R> ReadOnlyManyCommand<K, V, R> buildReadOnlyManyCommand(Collection<? extends K> keys, Function<ReadEntryView<K, V>, R> f, Params params);
 
    <K, V> WriteOnlyKeyCommand<K, V> buildWriteOnlyKeyCommand(
       K key, Consumer<WriteEntryView<V>> f, Params params);
@@ -504,4 +533,6 @@ public interface CommandsFactory {
    BackupWriteRpcCommand buildBackupWriteRpcCommand(DataWriteCommand command);
 
    BackupPutMapRpcCommand buildBackupPutMapRpcCommand(PutMapCommand command);
+
+   InvalidateVersionsCommand buildInvalidateVersionsCommand(Object[] keys, int[] topologyIds, long[] versions, boolean removed);
 }

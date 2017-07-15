@@ -4,6 +4,8 @@ import org.infinispan.commands.tx.CommitCommand;
 import org.infinispan.commands.tx.PrepareCommand;
 import org.infinispan.commands.tx.RollbackCommand;
 import org.infinispan.commands.write.ClearCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.PutMapCommand;
 import org.infinispan.commands.write.RemoveCommand;
@@ -28,7 +30,7 @@ public abstract class BaseBackupFailureTest extends AbstractTwoSitesTest {
    protected void createSites() {
       super.createSites();
       failureInterceptor = new FailureInterceptor();
-      backup("LON").getAdvancedCache().addInterceptor(failureInterceptor, 1);
+      backup("LON").getAdvancedCache().getAsyncInterceptorChain().addInterceptor(failureInterceptor, 1);
    }
 
    @BeforeMethod
@@ -38,7 +40,7 @@ public abstract class BaseBackupFailureTest extends AbstractTwoSitesTest {
 
    public static class FailureInterceptor extends CommandInterceptor {
 
-      protected volatile boolean isFailing = true;
+      protected volatile boolean isFailing = false;
 
       protected volatile boolean rollbackFailed;
       protected volatile boolean commitFailed;
@@ -46,10 +48,10 @@ public abstract class BaseBackupFailureTest extends AbstractTwoSitesTest {
       protected volatile boolean putFailed;
       protected volatile boolean removeFailed;
       protected volatile boolean replaceFailed;
+      protected volatile boolean computeFailed;
+      protected volatile boolean computeIfAbsentFailed;
       protected volatile boolean clearFailed;
       protected volatile boolean putMapFailed;
-
-      protected volatile boolean dontFailPrepare;
 
       public void reset() {
          rollbackFailed = false;
@@ -58,10 +60,11 @@ public abstract class BaseBackupFailureTest extends AbstractTwoSitesTest {
          putFailed = false;
          removeFailed = false;
          replaceFailed = false;
+         computeFailed = false;
+         computeIfAbsentFailed = false;
          clearFailed = false;
          putMapFailed = false;
-         dontFailPrepare = false;
-         isFailing = true;
+         isFailing = false;
       }
 
       @Override
@@ -86,7 +89,7 @@ public abstract class BaseBackupFailureTest extends AbstractTwoSitesTest {
 
       @Override
       public Object visitPrepareCommand(TxInvocationContext ctx, PrepareCommand command) throws Throwable {
-         if (isFailing && !dontFailPrepare) {
+         if (isFailing) {
             prepareFailed = true;
             throw new CacheException("Induced failure");
          } else {
@@ -125,6 +128,26 @@ public abstract class BaseBackupFailureTest extends AbstractTwoSitesTest {
       }
 
       @Override
+      public Object visitComputeCommand(InvocationContext ctx, ComputeCommand command) throws Throwable {
+         if (isFailing) {
+            computeFailed = true;
+            throw new CacheException("Induced failure");
+         } else {
+            return invokeNextInterceptor(ctx, command);
+         }
+      }
+
+      @Override
+      public Object visitComputeIfAbsentCommand(InvocationContext ctx, ComputeIfAbsentCommand command) throws Throwable {
+         if (isFailing) {
+            computeIfAbsentFailed = true;
+            throw new CacheException("Induced failure");
+         } else {
+            return invokeNextInterceptor(ctx, command);
+         }
+      }
+
+      @Override
       public Object visitClearCommand(InvocationContext ctx, ClearCommand command) throws Throwable {
          if (isFailing) {
             clearFailed = true;
@@ -150,10 +173,6 @@ public abstract class BaseBackupFailureTest extends AbstractTwoSitesTest {
 
       public void enable() {
          isFailing = true;
-      }
-
-      public void dontFailPrepare() {
-         dontFailPrepare = true;
       }
    }
 

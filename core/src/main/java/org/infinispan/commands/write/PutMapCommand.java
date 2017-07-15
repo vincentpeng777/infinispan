@@ -117,6 +117,7 @@ public class PutMapCommand extends AbstractTopologyAffectedCommand implements Wr
 
             // Even though putAll() returns void, QueryInterceptor reads the previous values
             // TODO The previous values are not correct if the entries exist only in a store
+            // We have to add null values due to the handling in distribution interceptor, see ISPN-7975
             if (previousValues != null) {
                previousValues.put(key, previousValue);
             }
@@ -246,8 +247,8 @@ public class PutMapCommand extends AbstractTopologyAffectedCommand implements Wr
    }
 
    @Override
-   public void updateStatusFromRemoteResponse(Object remoteResponse) {
-      // Do nothing
+   public void fail() {
+      throw new UnsupportedOperationException();
    }
 
    @Override

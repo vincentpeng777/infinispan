@@ -63,37 +63,36 @@ public class TestQueryHelperFactory {
    }
 
    public static List createTopologyAwareCacheNodes(int numberOfNodes, CacheMode cacheMode, boolean transactional,
-         boolean indexLocalOnly, boolean isRamDirectoryProvider, String defaultCacheName) {
+         boolean indexLocalOnly, boolean isRamDirectoryProvider, String defaultCacheName, Class... indexedTypes) {
       return createTopologyAwareCacheNodes(numberOfNodes, cacheMode, transactional, indexLocalOnly,
-            isRamDirectoryProvider, defaultCacheName, f -> {});
+            isRamDirectoryProvider, defaultCacheName, f -> {}, indexedTypes);
    }
 
    public static List createTopologyAwareCacheNodes(int numberOfNodes, CacheMode cacheMode, boolean transactional,
          boolean indexLocalOnly, boolean isRamDirectoryProvider, String defaultCacheName,
-         Consumer<ConfigurationBuilderHolder> holderConsumer) {
+         Consumer<ConfigurationBuilderHolder> holderConsumer, Class... indexedTypes) {
       List caches = new ArrayList();
 
       ConfigurationBuilder builder = AbstractCacheTest.getDefaultClusteredCacheConfig(cacheMode, transactional);
 
-      builder.indexing().index(indexLocalOnly ? Index.LOCAL : Index.ALL);
+      builder.indexing().index(indexLocalOnly ? Index.PRIMARY_OWNER : Index.ALL);
 
       if (isRamDirectoryProvider) {
          builder.indexing()
-            .addIndexedEntity(Person.class)
-            .addIndexedEntity(Car.class)
-            .addProperty("default.directory_provider", "ram")
+            .addProperty("default.directory_provider", "local-heap")
             .addProperty("lucene_version", "LUCENE_CURRENT")
             .addProperty("error_handler", "org.infinispan.query.helper.StaticTestingErrorHandler");
       } else {
          builder.indexing()
-            .addIndexedEntity(Person.class)
-            .addIndexedEntity(Car.class)
             .addProperty("default.indexmanager", "org.infinispan.query.indexmanager.InfinispanIndexManager")
             .addProperty("lucene_version", "LUCENE_CURRENT")
             .addProperty("error_handler", "org.infinispan.query.helper.StaticTestingErrorHandler");
          if (cacheMode.isClustered()) {
             builder.clustering().stateTransfer().fetchInMemoryState(true);
          }
+      }
+      for (Class indexedType : indexedTypes) {
+         builder.indexing().addIndexedEntity(indexedType);
       }
 
       for (int i = 0; i < numberOfNodes; i++) {

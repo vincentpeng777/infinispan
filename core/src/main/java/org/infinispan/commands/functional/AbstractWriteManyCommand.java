@@ -17,8 +17,16 @@ public abstract class AbstractWriteManyCommand<K, V> implements WriteCommand, Fu
    // and make sure that ClusteringDependentLogic checks them.
    long flags;
 
-   protected AbstractWriteManyCommand(CommandInvocationId commandInvocationId) {
+   protected AbstractWriteManyCommand(CommandInvocationId commandInvocationId, Params params) {
       this.commandInvocationId = commandInvocationId;
+      this.params = params;
+      this.flags = params.toFlagsBitSet();
+   }
+
+   protected <K, V> AbstractWriteManyCommand(AbstractWriteManyCommand<K, V> command) {
+      this.commandInvocationId = command.commandInvocationId;
+      this.params = command.params;
+      this.flags = command.flags;
    }
 
    protected AbstractWriteManyCommand() {
@@ -68,7 +76,8 @@ public abstract class AbstractWriteManyCommand<K, V> implements WriteCommand, Fu
    }
 
    @Override
-   public void updateStatusFromRemoteResponse(Object remoteResponse) {
+   public void fail() {
+      throw new UnsupportedOperationException();
    }
 
    @Override

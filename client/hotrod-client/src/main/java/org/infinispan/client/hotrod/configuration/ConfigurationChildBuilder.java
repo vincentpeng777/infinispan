@@ -1,5 +1,6 @@
 package org.infinispan.client.hotrod.configuration;
 
+import java.util.List;
 import java.util.Properties;
 
 import org.infinispan.client.hotrod.ProtocolVersion;
@@ -181,6 +182,19 @@ public interface ConfigurationChildBuilder {
     * Zero means no retry will made in case of a network failure. It defaults to 10.
     */
    ConfigurationBuilder maxRetries(int maxRetries);
+
+   /**
+    * List of regular expressions for classes that can be deserialized using standard Java deserialization
+    * when reading data that might have been stored with a different endpoint, e.g. REST.
+    */
+   ConfigurationBuilder addJavaSerialWhiteList(String... regEx);
+
+   /**
+    * Sets the batch size of internal iterators (ie. <code>keySet().iterator()</code>. Defaults to 10_000
+    * @param batchSize the batch size to set
+    * @return this configuration builder with the batch size set
+    */
+   ConfigurationBuilder batchSize(int batchSize);
 
    /**
     * Configures this builder using the specified properties

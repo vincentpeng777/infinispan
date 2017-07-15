@@ -22,8 +22,6 @@ import org.testng.AssertJUnit;
 import org.testng.annotations.Test;
 
 /**
- * {@link org.infinispan.atomic.impl.AtomicHashMap} test with write skew check enabled in a replicated cluster.
- *
  * @author Pedro Ruivo
  * @since 7.0
  */
@@ -105,7 +103,7 @@ public class ReplWriteSkewAtomicMapAPITest extends RepeatableReadAtomicMapAPITes
             .lockingMode(LockingMode.OPTIMISTIC)
             .locking().lockAcquisitionTimeout(TestingUtil.shortTimeoutMillis())
             .isolationLevel(IsolationLevel.REPEATABLE_READ)
-            .clustering().hash().numOwners(2)
+            .clustering().hash().numOwners(2).groups().enabled()
             .stateTransfer().fetchInMemoryState(false);
       return configurationBuilder;
    }

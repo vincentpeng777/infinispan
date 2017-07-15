@@ -5,7 +5,7 @@
    <parent>
       <groupId>org.infinispan</groupId>
       <artifactId>infinispan-parent</artifactId>
-      <version>9.0.1-SNAPSHOT</version>
+      <version>9.1.1-SNAPSHOT</version>
       <relativePath>../parent/pom.xml</relativePath>
    </parent>
 
@@ -94,6 +94,12 @@
       <dependency>
          <groupId>commons-logging</groupId>
          <artifactId>commons-logging</artifactId>
+         <scope>test</scope>
+      </dependency>
+
+      <dependency>
+         <groupId>com.h2database</groupId>
+         <artifactId>h2</artifactId>
          <scope>test</scope>
       </dependency>
    </dependencies>

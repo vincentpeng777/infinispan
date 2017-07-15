@@ -65,7 +65,7 @@ public class OriginatorBecomesOwnerLockTest extends MultipleCacheManagersTest {
       configurationBuilder.locking().lockAcquisitionTimeout(TestingUtil.shortTimeoutMillis());
       configurationBuilder.clustering().stateTransfer().fetchInMemoryState(true);
       ControlledConsistentHashFactory consistentHashFactory =
-            new ControlledConsistentHashFactory(new int[]{KILLED_INDEX, ORIGINATOR_INDEX},
+            new ControlledConsistentHashFactory.Default(new int[]{KILLED_INDEX, ORIGINATOR_INDEX},
                   new int[]{KILLED_INDEX, OTHER_INDEX});
       configurationBuilder.clustering().hash().numSegments(2).consistentHashFactory(consistentHashFactory);
       createCluster(configurationBuilder, 3);
@@ -240,13 +240,13 @@ public class OriginatorBecomesOwnerLockTest extends MultipleCacheManagersTest {
          manager(KILLED_INDEX).stop();
       }
       if (waitForStateTransfer) {
-         TestingUtil.waitForRehashToComplete(originatorCache, otherCache);
+         TestingUtil.waitForNoRebalance(originatorCache, otherCache);
       }
    }
 
    private void checkValue(Object key, String value) {
       if (!waitForStateTransfer) {
-         TestingUtil.waitForRehashToComplete(originatorCache, otherCache);
+         TestingUtil.waitForNoRebalance(originatorCache, otherCache);
       }
       log.tracef("Checking key: %s", key);
       InternalCacheEntry d0 = advancedCache(ORIGINATOR_INDEX).getDataContainer().get(key);

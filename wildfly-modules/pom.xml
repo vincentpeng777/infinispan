@@ -4,7 +4,7 @@
    <parent>
       <groupId>org.infinispan</groupId>
       <artifactId>infinispan-parent</artifactId>
-      <version>9.0.1-SNAPSHOT</version>
+      <version>9.1.1-SNAPSHOT</version>
       <relativePath>../parent/pom.xml</relativePath>
    </parent>
 
@@ -13,6 +13,11 @@
    <packaging>pom</packaging>
 
    <dependencies>
+      <dependency>
+         <groupId>org.apache.ant</groupId>
+         <artifactId>ant</artifactId>
+         <version>${version.ant}</version>
+      </dependency>
       <dependency>
          <groupId>org.infinispan</groupId>
          <artifactId>infinispan-core</artifactId>
@@ -104,6 +109,73 @@
       </dependency>
 
       <dependency>
+         <groupId>org.infinispan</groupId>
+         <artifactId>infinispan-server-hotrod</artifactId>
+      </dependency>
+
+      <dependency>
+         <groupId>org.infinispan</groupId>
+         <artifactId>infinispan-server-memcached</artifactId>
+      </dependency>
+
+      <dependency>
+         <groupId>org.infinispan</groupId>
+         <artifactId>infinispan-server-rest</artifactId>
+      </dependency>
+
+      <dependency>
+         <groupId>org.infinispan</groupId>
+         <artifactId>infinispan-server-router</artifactId>
+      </dependency>
+
+      <dependency>
+         <groupId>org.infinispan</groupId>
+         <artifactId>infinispan-server-websocket</artifactId>
+      </dependency>
+
+      <dependency>
+         <groupId>org.infinispan.server</groupId>
+         <artifactId>infinispan-server-infinispan</artifactId>
+         <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+         <groupId>org.infinispan</groupId>
+         <artifactId>infinispan-server-core</artifactId>
+         <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+         <groupId>org.infinispan.server</groupId>
+         <artifactId>infinispan-server-commons</artifactId>
+         <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+         <groupId>org.infinispan.server</groupId>
+         <artifactId>infinispan-server-endpoints</artifactId>
+         <version>${project.version}</version>
+      </dependency>
+
+       <dependency>
+           <groupId>org.infinispan.server</groupId>
+           <artifactId>infinispan-server-event-logger</artifactId>
+          <version>${project.version}</version>
+       </dependency>
+
+      <dependency>
+         <groupId>org.infinispan.server</groupId>
+         <artifactId>infinispan-server-jgroups</artifactId>
+         <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+         <groupId>com.thoughtworks.xstream</groupId>
+         <artifactId>xstream</artifactId>
+         <version>${version.xstream}</version>
+      </dependency>
+
+      <dependency>
          <groupId>com.github.ben-manes.caffeine</groupId>
          <artifactId>caffeine</artifactId>
          <version>${version.caffeine}</version>
@@ -171,15 +243,7 @@
 
       <dependency>
          <groupId>org.jgroups.kubernetes</groupId>
-         <artifactId>kubernetes</artifactId>
-      </dependency>
-      <dependency>
-         <groupId>org.jgroups.kubernetes</groupId>
-         <artifactId>common</artifactId>
-      </dependency>
-      <dependency>
-         <groupId>org.jgroups.kubernetes</groupId>
-         <artifactId>dns</artifactId>
+         <artifactId>jgroups-kubernetes</artifactId>
       </dependency>
       <dependency>
          <groupId>net.oauth.core</groupId>
@@ -191,7 +255,16 @@
    <build>
       <plugins>
          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
             <artifactId>maven-antrun-plugin</artifactId>
+            <version>${version.maven.antrun}</version>
+            <dependencies>
+               <dependency>
+                  <groupId>org.codehaus.groovy</groupId>
+                  <artifactId>groovy-all</artifactId>
+                  <version>${version.groovy}</version>
+               </dependency>
+            </dependencies>
             <executions>
                <execution>
                   <id>build-dist-dir</id>

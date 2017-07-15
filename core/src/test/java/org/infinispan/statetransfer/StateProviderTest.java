@@ -1,6 +1,7 @@
 package org.infinispan.statetransfer;
 
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyBoolean;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -164,7 +165,7 @@ public class StateProviderTest {
       when(transactionTable.getLocalTransactions()).thenReturn(Collections.emptyList());
       when(transactionTable.getRemoteTransactions()).thenReturn(Collections.emptyList());
 
-      cacheTopology = new CacheTopology(1, 1, ch1, ch1, ch1, ch1.getMembers(), persistentUUIDManager.mapAddresses(ch1.getMembers()));
+      cacheTopology = new CacheTopology(1, 1, ch1, ch1, ch1, CacheTopology.Phase.READ_OLD_WRITE_ALL, ch1.getMembers(), persistentUUIDManager.mapAddresses(ch1.getMembers()));
       stateProvider.onTopologyUpdate(cacheTopology, false);
 
       log.debug("ch1: " + ch1);
@@ -181,17 +182,17 @@ public class StateProviderTest {
 
       verifyNoMoreInteractions(stateTransferLock);
 
-      stateProvider.startOutboundTransfer(F, 1, Collections.singleton(0));
+      stateProvider.startOutboundTransfer(F, 1, Collections.singleton(0), true);
 
       assertTrue(stateProvider.isStateTransferInProgress());
 
       log.debug("ch2: " + ch2);
-      cacheTopology = new CacheTopology(2, 1, ch2, ch2, ch2, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers()));
+      cacheTopology = new CacheTopology(2, 1, ch2, ch2, ch2, CacheTopology.Phase.READ_OLD_WRITE_ALL, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers()));
       stateProvider.onTopologyUpdate(cacheTopology, true);
 
       assertFalse(stateProvider.isStateTransferInProgress());
 
-      stateProvider.startOutboundTransfer(D, 1, Collections.singleton(0));
+      stateProvider.startOutboundTransfer(D, 1, Collections.singleton(0), true);
 
       assertTrue(stateProvider.isStateTransferInProgress());
 
@@ -217,11 +218,12 @@ public class StateProviderTest {
       //todo [anistor] it seems that address 6 is not used for un-owned segments
       DefaultConsistentHash ch2 = chf.updateMembers(ch1, members2, null);
 
-      when(commandsFactory.buildStateResponseCommand(any(Address.class), anyInt(), any(Collection.class)))
+      when(commandsFactory.buildStateResponseCommand(any(Address.class), anyInt(), any(Collection.class), anyBoolean(), anyBoolean()))
             .thenAnswer(invocation -> new StateResponseCommand(ByteString.fromString("testCache"),
                                                                (Address) invocation.getArguments()[0],
-                                                               ((Integer) invocation.getArguments()[1]),
-                                                               (Collection<StateChunk>) invocation.getArguments()[2]));
+                                                               (Integer) invocation.getArguments()[1],
+                                                               (Collection<StateChunk>) invocation.getArguments()[2],
+                                                               true, false));
 
       // create dependencies
       when(rpcManager.getAddress()).thenReturn(A);
@@ -267,7 +269,7 @@ public class StateProviderTest {
       when(transactionTable.getLocalTransactions()).thenReturn(Collections.emptyList());
       when(transactionTable.getRemoteTransactions()).thenReturn(Collections.emptyList());
 
-      cacheTopology = new CacheTopology(1, 1, ch1, ch1, ch1, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers()));
+      cacheTopology = new CacheTopology(1, 1, ch1, ch1, ch1, CacheTopology.Phase.READ_OLD_WRITE_ALL, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch1.getMembers()));
       stateProvider.onTopologyUpdate(cacheTopology, false);
 
       log.debug("ch1: " + ch1);
@@ -284,18 +286,18 @@ public class StateProviderTest {
 
       verifyNoMoreInteractions(stateTransferLock);
 
-      stateProvider.startOutboundTransfer(F, 1, Collections.singleton(0));
+      stateProvider.startOutboundTransfer(F, 1, Collections.singleton(0), true);
 
       assertTrue(stateProvider.isStateTransferInProgress());
 
       // TestingUtil.sleepThread(15000);
       log.debug("ch2: " + ch2);
-      cacheTopology = new CacheTopology(2, 1, ch2, ch2, ch2, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers()));
+      cacheTopology = new CacheTopology(2, 1, ch2, ch2, ch2, CacheTopology.Phase.READ_OLD_WRITE_ALL, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers()));
       stateProvider.onTopologyUpdate(cacheTopology, false);
 
       assertFalse(stateProvider.isStateTransferInProgress());
 
-      stateProvider.startOutboundTransfer(E, 1, Collections.singleton(0));
+      stateProvider.startOutboundTransfer(E, 1, Collections.singleton(0), true);
 
       assertTrue(stateProvider.isStateTransferInProgress());
 

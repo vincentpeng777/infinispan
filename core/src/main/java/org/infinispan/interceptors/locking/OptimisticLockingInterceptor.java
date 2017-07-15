@@ -7,7 +7,6 @@ import org.infinispan.commands.DataCommand;
 import org.infinispan.commands.FlagAffectedCommand;
 import org.infinispan.commands.control.LockControlCommand;
 import org.infinispan.commands.tx.PrepareCommand;
-import org.infinispan.commands.write.ApplyDeltaCommand;
 import org.infinispan.commands.write.DataWriteCommand;
 import org.infinispan.context.InvocationContext;
 import org.infinispan.context.impl.TxInvocationContext;
@@ -54,13 +53,13 @@ public class OptimisticLockingInterceptor extends AbstractTxLockingInterceptor {
    }
 
    @Override
-   public Object visitApplyDeltaCommand(InvocationContext ctx, ApplyDeltaCommand command) throws Throwable {
+   protected Object visitDataWriteCommand(InvocationContext ctx, DataWriteCommand command) throws Throwable {
       return invokeNextAndFinally(ctx, command, unlockAllReturnHandler);
    }
 
    @Override
-   protected Object visitDataWriteCommand(InvocationContext ctx, DataWriteCommand command) throws Throwable {
-      return invokeNextAndFinally(ctx, command, unlockAllReturnHandler);
+   protected Object handleReadManyCommand(InvocationContext ctx, FlagAffectedCommand command, Collection<?> keys) {
+      return invokeNext(ctx, command);
    }
 
    @Override

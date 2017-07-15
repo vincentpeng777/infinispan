@@ -13,6 +13,7 @@ import static org.infinispan.factories.KnownComponentNames.shortened;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -58,10 +59,13 @@ import org.infinispan.configuration.global.ShutdownHookBehavior;
 import org.infinispan.configuration.global.ThreadPoolConfiguration;
 import org.infinispan.configuration.global.ThreadPoolConfigurationBuilder;
 import org.infinispan.configuration.global.TransportConfigurationBuilder;
+import org.infinispan.conflict.EntryMergePolicy;
+import org.infinispan.conflict.MergePolicies;
 import org.infinispan.eviction.EvictionStrategy;
 import org.infinispan.eviction.EvictionThreadPolicy;
 import org.infinispan.eviction.EvictionType;
 import org.infinispan.factories.threads.DefaultThreadFactory;
+import org.infinispan.partitionhandling.PartitionHandling;
 import org.infinispan.persistence.cluster.ClusterLoader;
 import org.infinispan.persistence.file.SingleFileStore;
 import org.infinispan.persistence.spi.CacheLoader;
@@ -86,6 +90,7 @@ import org.kohsuke.MetaInfServices;
  */
 @MetaInfServices
 @Namespaces({
+      @Namespace(uri = "urn:infinispan:config:9.1", root = "infinispan"),
       @Namespace(uri = "urn:infinispan:config:9.0", root = "infinispan"),
       @Namespace(root = "infinispan"),
 
@@ -598,6 +603,22 @@ public class Parser implements ConfigurationParser {
             }
             case DISTRIBUTED_CACHE_CONFIGURATION: {
                parseDistributedCache(reader, holder, true);
+               break;
+            }
+            case SCATTERED_CACHE: {
+               if (reader.getSchema().since(9, 1)) {
+                  parseScatteredCache(reader, holder, false);
+               } else {
+                  throw ParseUtils.unexpectedElement(reader);
+               }
+               break;
+            }
+            case SCATTERED_CACHE_CONFIGURATION: {
+               if (reader.getSchema().since(9, 1)) {
+                  parseScatteredCache(reader, holder, true);
+               } else {
+                  throw ParseUtils.unexpectedElement(reader);
+               }
                break;
             }
             case SERIALIZATION: {
@@ -1243,14 +1264,26 @@ public class Parser implements ConfigurationParser {
       }
    }
 
-   private void parsePartitionHandling(XMLExtendedStreamReader reader, ConfigurationBuilder builder) throws XMLStreamException {
+   private void parsePartitionHandling(XMLExtendedStreamReader reader, ConfigurationBuilderHolder holder) throws XMLStreamException {
+      ConfigurationBuilder builder = holder.getCurrentConfigurationBuilder();
       PartitionHandlingConfigurationBuilder ph = builder.clustering().partitionHandling();
       for (int i = 0; i < reader.getAttributeCount(); i++) {
          String value = replaceProperties(reader.getAttributeValue(i));
          Attribute attribute = Attribute.forName(reader.getAttributeLocalName(i));
          switch (attribute) {
             case ENABLED: {
+               log.partitionHandlingConfigurationEnabledDeprecated();
                ph.enabled(Boolean.valueOf(value));
+               break;
+            }
+            case WHEN_SPLIT: {
+               ph.whenSplit(PartitionHandling.valueOf(value.toUpperCase()));
+               break;
+            }
+            case MERGE_POLICY: {
+               MergePolicy mp = MergePolicy.fromString(value);
+               EntryMergePolicy mergePolicy = mp == MergePolicy.CUSTOM ? Util.getInstance(value, holder.getClassLoader()) : mp.impl;
+               ph.mergePolicy(mergePolicy);
                break;
             }
             default: {
@@ -1498,7 +1531,7 @@ public class Parser implements ConfigurationParser {
             break;
          }
          case PARTITION_HANDLING: {
-            this.parsePartitionHandling(reader, builder);
+            this.parsePartitionHandling(reader, holder);
             break;
          }
          case SECURITY: {
@@ -1929,6 +1962,32 @@ public class Parser implements ConfigurationParser {
       holder.popScope();
    }
 
+   private void parseSegmentedCacheAttribute(XMLExtendedStreamReader reader,
+                                             int index, Attribute attribute, String value, ConfigurationBuilder builder, ClassLoader classLoader, CacheMode baseCacheMode)
+      throws XMLStreamException {
+      switch (attribute) {
+         case SEGMENTS: {
+            builder.clustering().hash().numSegments(Integer.parseInt(value));
+            break;
+         }
+         case CONSISTENT_HASH_FACTORY: {
+            builder.clustering().hash().consistentHashFactory(Util.getInstance(value, classLoader));
+            break;
+         }
+         case KEY_PARTITIONER: {
+            if (reader.getSchema().since(8, 2)) {
+               builder.clustering().hash().keyPartitioner(Util.getInstance(value, classLoader));
+            } else {
+               throw ParseUtils.unexpectedAttribute(reader, index);
+            }
+            break;
+         }
+         default: {
+            this.parseClusteredCacheAttribute(reader, index, attribute, value, builder, baseCacheMode);
+         }
+      }
+   }
+
    private void parseClusteredCacheAttribute(XMLExtendedStreamReader reader,
          int index, Attribute attribute, String value, ConfigurationBuilder builder, CacheMode baseCacheMode)
          throws XMLStreamException {
@@ -1974,27 +2033,7 @@ public class Parser implements ConfigurationParser {
       for (int i = 0; i < reader.getAttributeCount(); i++) {
          String value = replaceProperties(reader.getAttributeValue(i));
          Attribute attribute = Attribute.forName(reader.getAttributeLocalName(i));
-         switch (attribute) {
-            case SEGMENTS: {
-               builder.clustering().hash().numSegments(Integer.parseInt(value));
-               break;
-            }
-            case CONSISTENT_HASH_FACTORY: {
-               builder.clustering().hash().consistentHashFactory(Util.getInstance(value, holder.getClassLoader()));
-               break;
-            }
-            case KEY_PARTITIONER: {
-               if (reader.getSchema().since(8, 2)) {
-                  builder.clustering().hash().keyPartitioner(Util.getInstance(value, holder.getClassLoader()));
-               } else {
-                  throw ParseUtils.unexpectedAttribute(reader, i);
-               }
-               break;
-            }
-            default: {
-               this.parseClusteredCacheAttribute(reader, i, attribute, value, builder, baseCacheMode);
-            }
-         }
+         parseSegmentedCacheAttribute(reader, i, attribute, value, builder, holder.getClassLoader(), baseCacheMode);
       }
 
       while (reader.hasNext() && (reader.nextTag() != XMLStreamConstants.END_ELEMENT)) {
@@ -2052,10 +2091,6 @@ public class Parser implements ConfigurationParser {
                builder.clustering().hash().numOwners(Integer.parseInt(value));
                break;
             }
-            case SEGMENTS: {
-               builder.clustering().hash().numSegments(Integer.parseInt(value));
-               break;
-            }
             case L1_LIFESPAN: {
                long lifespan = Long.parseLong(value);
                if (lifespan > 0)
@@ -2072,21 +2107,8 @@ public class Parser implements ConfigurationParser {
                builder.clustering().hash().capacityFactor(Float.parseFloat(value));
                break;
             }
-            case CONSISTENT_HASH_FACTORY: {
-               builder.clustering().hash().consistentHashFactory(
-                     Util.getInstance(value, holder.getClassLoader()));
-               break;
-            }
-            case KEY_PARTITIONER: {
-               if (reader.getSchema().since(8, 2)) {
-                  builder.clustering().hash().keyPartitioner(Util.getInstance(value, holder.getClassLoader()));
-               } else {
-                  throw ParseUtils.unexpectedAttribute(reader, i);
-               }
-               break;
-            }
             default: {
-               this.parseClusteredCacheAttribute(reader, i, attribute, value, builder, baseCacheMode);
+               this.parseSegmentedCacheAttribute(reader, i, attribute, value, builder, holder.getClassLoader(), baseCacheMode);
             }
          }
       }
@@ -2138,6 +2160,36 @@ public class Parser implements ConfigurationParser {
          }
       }
 
+   }
+
+   private void parseScatteredCache(XMLExtendedStreamReader reader, ConfigurationBuilderHolder holder, boolean template) throws XMLStreamException {
+      String name = reader.getAttributeValue(null, Attribute.NAME.getLocalName());
+      String configuration = reader.getAttributeValue(null, Attribute.CONFIGURATION.getLocalName());
+      ConfigurationBuilder builder = getConfigurationBuilder(holder, name, template, configuration);
+      CacheMode baseCacheMode = configuration == null ? CacheMode.SCATTERED_SYNC : builder.clustering().cacheMode();
+      builder.clustering().cacheMode(baseCacheMode);
+      for (int i = 0; i < reader.getAttributeCount(); i++) {
+         String value = replaceProperties(reader.getAttributeValue(i));
+         Attribute attribute = Attribute.forName(reader.getAttributeLocalName(i));
+         switch (attribute) {
+            case INVALIDATION_BATCH_SIZE: {
+               builder.clustering().invalidationBatchSize(Integer.parseInt(value));
+               break;
+            }
+            default: {
+               this.parseSegmentedCacheAttribute(reader, i, attribute, value, builder, holder.getClassLoader(), baseCacheMode);
+            }
+         }
+      }
+
+      while (reader.hasNext() && (reader.nextTag() != XMLStreamConstants.END_ELEMENT)) {
+         Element element = Element.forName(reader.getLocalName());
+         switch (element) {
+            default: {
+               this.parseSharedStateCacheElement(reader, element, holder);
+            }
+         }
+      }
    }
 
    private ConfigurationBuilder getConfigurationBuilder(ConfigurationBuilderHolder holder, String name, boolean template, String baseConfigurationName) {
@@ -2280,6 +2332,10 @@ public class Parser implements ConfigurationParser {
          }
          case TRANSACTIONAL: {
             storeBuilder.transactional(Boolean.parseBoolean(value));
+            break;
+         }
+         case MAX_BATCH_SIZE: {
+            storeBuilder.maxBatchSize(Integer.parseInt(value));
             break;
          }
          default: {
@@ -2552,6 +2608,39 @@ public class Parser implements ConfigurationParser {
          }
       }
       return properties;
+   }
+
+   public enum MergePolicy {
+      CUSTOM(null),
+      NONE(null),
+      PREFERRED_ALWAYS(MergePolicies.PREFERRED_ALWAYS),
+      PREFERRED_NON_NULL(MergePolicies.PREFERRED_NON_NULL),
+      REMOVE_ALL(MergePolicies.REMOVE_ALL);
+
+      private final EntryMergePolicy impl;
+      MergePolicy(EntryMergePolicy policy) {
+         this.impl = policy;
+      }
+
+      public EntryMergePolicy getImpl() {
+         return impl;
+      }
+
+      public static MergePolicy fromString(String str) {
+         for (MergePolicy mp : MergePolicy.values())
+            if (mp.name().equalsIgnoreCase(str))
+               return mp;
+         return CUSTOM;
+      }
+
+      public static MergePolicy fromConfiguration(EntryMergePolicy policy) {
+         if (policy == null) return NONE;
+
+         for (MergePolicy mp : MergePolicy.values())
+            if (mp.impl != null && Objects.equals(mp.impl.getClass(), policy.getClass()))
+               return mp;
+         return CUSTOM;
+      }
    }
 
    public enum TransactionMode {

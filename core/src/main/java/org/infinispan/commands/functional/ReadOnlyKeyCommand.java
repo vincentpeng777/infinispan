@@ -9,20 +9,24 @@ import java.util.function.Function;
 
 import org.infinispan.commands.Visitor;
 import org.infinispan.commands.read.AbstractDataCommand;
-import org.infinispan.commons.api.functional.EntryView.ReadEntryView;
+import org.infinispan.functional.EntryView.ReadEntryView;
 import org.infinispan.commons.util.EnumUtil;
 import org.infinispan.container.entries.CacheEntry;
 import org.infinispan.context.InvocationContext;
 import org.infinispan.functional.impl.EntryViews;
+import org.infinispan.functional.impl.Params;
 
 public class ReadOnlyKeyCommand<K, V, R> extends AbstractDataCommand {
 
    public static final int COMMAND_ID = 62;
    protected Function<ReadEntryView<K, V>, R> f;
+   protected Params params;
 
-   public ReadOnlyKeyCommand(Object key, Function<ReadEntryView<K, V>, R> f) {
+   public ReadOnlyKeyCommand(Object key, Function<ReadEntryView<K, V>, R> f, Params params) {
       super(key, EnumUtil.EMPTY_BIT_SET);
       this.f = f;
+      this.params = params;
+      this.setFlagsBitSet(params.toFlagsBitSet());
    }
 
    public ReadOnlyKeyCommand() {
@@ -37,12 +41,15 @@ public class ReadOnlyKeyCommand<K, V, R> extends AbstractDataCommand {
    public void writeTo(ObjectOutput output) throws IOException {
       output.writeObject(key);
       output.writeObject(f);
+      Params.writeObject(output, params);
    }
 
    @Override
    public void readFrom(ObjectInput input) throws IOException, ClassNotFoundException {
       key = input.readObject();
       f = (Function<ReadEntryView<K, V>, R>) input.readObject();
+      params = Params.readObject(input);
+      this.setFlagsBitSet(params.toFlagsBitSet());
    }
 
    // Not really invoked unless in local mode
@@ -69,6 +76,13 @@ public class ReadOnlyKeyCommand<K, V, R> extends AbstractDataCommand {
       return LoadType.OWNER;
    }
 
+   /**
+    * Apply function on entry without any data
+    */
+   public Object performOnLostData() {
+      return f.apply(EntryViews.noValue((K) key));
+   }
+
    @Override
    public String toString() {
       return "ReadOnlyKeyCommand{" +
@@ -76,5 +90,4 @@ public class ReadOnlyKeyCommand<K, V, R> extends AbstractDataCommand {
             ", f=" + f +
             '}';
    }
-
 }

@@ -5,10 +5,9 @@ import java.io.ObjectInput;
 import java.io.ObjectOutput;
 import java.util.Set;
 
-import org.infinispan.commons.api.functional.EntryVersion;
-import org.infinispan.commons.api.functional.EntryVersion.NumericEntryVersion;
-import org.infinispan.commons.api.functional.MetaParam.MetaEntryVersion;
-import org.infinispan.commons.api.functional.MetaParam.MetaLifespan;
+import org.infinispan.container.versioning.EntryVersion;
+import org.infinispan.functional.MetaParam.MetaEntryVersion;
+import org.infinispan.functional.MetaParam.MetaLifespan;
 import org.infinispan.commons.marshall.AbstractExternalizer;
 import org.infinispan.commons.util.Util;
 import org.infinispan.marshall.core.Ids;
@@ -61,29 +60,6 @@ public final class MetaParamExternalizers {
       @Override
       public Integer getId() {
          return Ids.META_ENTRY_VERSION;
-      }
-   }
-
-   public static final class NumericEntryVersionExternalizer extends AbstractExternalizer<NumericEntryVersion> {
-      @Override
-      public void writeObject(ObjectOutput output, NumericEntryVersion object) throws IOException {
-         output.writeLong(object.get());
-      }
-
-      @Override
-      public NumericEntryVersion readObject(ObjectInput input) throws IOException, ClassNotFoundException {
-         long version = input.readLong();
-         return new NumericEntryVersion(version);
-      }
-
-      @Override
-      public Set<Class<? extends NumericEntryVersion>> getTypeClasses() {
-         return Util.<Class<? extends NumericEntryVersion>>asSet(NumericEntryVersion.class);
-      }
-
-      @Override
-      public Integer getId() {
-         return Ids.NUMERIC_ENTRY_VERSION;
       }
    }
 

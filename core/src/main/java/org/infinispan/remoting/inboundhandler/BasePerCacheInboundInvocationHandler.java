@@ -15,6 +15,8 @@ import org.infinispan.commands.remote.SingleRpcCommand;
 import org.infinispan.commons.CacheException;
 import org.infinispan.factories.annotations.ComponentName;
 import org.infinispan.factories.annotations.Inject;
+import org.infinispan.factories.annotations.Stop;
+import org.infinispan.remoting.responses.CacheNotFoundResponse;
 import org.infinispan.remoting.inboundhandler.action.ReadyAction;
 import org.infinispan.remoting.responses.ExceptionResponse;
 import org.infinispan.remoting.responses.Response;
@@ -40,6 +42,7 @@ public abstract class BasePerCacheInboundInvocationHandler implements PerCacheIn
    protected StateTransferManager stateTransferManager;
    private ResponseGenerator responseGenerator;
    private CancellationService cancellationService;
+   private volatile boolean stopped = false;
 
    private static int extractCommandTopologyId(SingleRpcCommand command) {
       ReplicableCommand innerCmd = command.getCommand();
@@ -77,6 +80,15 @@ public abstract class BasePerCacheInboundInvocationHandler implements PerCacheIn
       this.cancellationService = cancellationService;
       this.stateTransferLock = stateTransferLock;
       this.stateTransferManager = stateTransferManager;
+   }
+
+   @Stop
+   public void stop() {
+      this.stopped = true;
+   }
+
+   public boolean isStopped() {
+      return stopped;
    }
 
    final CompletableFuture<Response> invokeCommand(CacheRpcCommand cmd) throws Throwable {
@@ -118,13 +130,13 @@ public abstract class BasePerCacheInboundInvocationHandler implements PerCacheIn
    }
 
    final ExceptionResponse outdatedTopology(OutdatedTopologyException exception) {
-      getLog().outdatedTopology(exception);
+      getLog().tracef("Topology changed, notifying the originator: %s", exception);
       return new ExceptionResponse(exception);
    }
 
-   final ExceptionResponse interruptedException(CacheRpcCommand command) {
+   final Response interruptedException(CacheRpcCommand command) {
       getLog().shutdownHandlingCommand(command);
-      return new ExceptionResponse(new CacheException("Cache is shutting down"));
+      return CacheNotFoundResponse.INSTANCE;
    }
 
    final void unexpectedDeliverMode(ReplicableCommand command, DeliverOrder deliverOrder) {

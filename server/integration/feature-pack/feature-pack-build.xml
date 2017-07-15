@@ -63,8 +63,16 @@
            output-file="docs/examples/configs/standalone-hotrod-rolling-upgrade.xml"/>
         <standalone
            template="configuration/examples/template-ssl.xml"
+           subsystems="configuration/examples/subsystems-hotrod-rolling-upgrade-ssl.xml"
+           output-file="docs/examples/configs/standalone-hotrod-rolling-upgrade-ssl.xml"/>
+        <standalone
+           template="configuration/examples/template-ssl.xml"
            subsystems="configuration/examples/subsystems-hotrod-ssl.xml"
            output-file="docs/examples/configs/standalone-hotrod-ssl.xml"/>
+        <standalone
+           template="configuration/examples/template-ssl.xml"
+           subsystems="configuration/examples/subsystems-rest-ssl.xml"
+           output-file="docs/examples/configs/standalone-rest-ssl.xml"/>
         <standalone
            template="configuration/examples/template-ssl-for-multi-tenancy.xml"
            subsystems="configuration/examples/subsystems-multi-tenancy.xml"

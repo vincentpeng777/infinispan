@@ -11,10 +11,11 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
-import org.infinispan.commons.api.functional.EntryView;
+import org.infinispan.functional.EntryView;
 import org.infinispan.container.entries.MVCCEntry;
 import org.infinispan.context.InvocationContext;
 import org.infinispan.functional.impl.EntryViews;
+import org.infinispan.functional.impl.Params;
 
 public class TxReadOnlyManyCommand<K, V, R> extends ReadOnlyManyCommand<K, V, R> {
    public static final byte COMMAND_ID = 65;
@@ -26,7 +27,7 @@ public class TxReadOnlyManyCommand<K, V, R> extends ReadOnlyManyCommand<K, V, R>
    }
 
    public TxReadOnlyManyCommand(Collection<? extends K> keys, List<List<Mutation<K, V, ?>>> mutations) {
-      super(keys, null);
+      super(keys, null, Params.create());
       this.mutations = mutations;
    }
 

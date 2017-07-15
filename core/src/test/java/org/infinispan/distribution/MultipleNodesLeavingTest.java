@@ -6,6 +6,7 @@ import org.infinispan.configuration.cache.CacheMode;
 import org.infinispan.remoting.transport.Address;
 import org.infinispan.test.MultipleCacheManagersTest;
 import org.infinispan.test.TestingUtil;
+import org.infinispan.test.fwk.InCacheMode;
 import org.testng.annotations.Test;
 
 /**
@@ -13,11 +14,12 @@ import org.testng.annotations.Test;
  * @since 5.0
  */
 @Test (groups = "functional", testName = "distribution.MultipleNodesLeavingTest")
+@InCacheMode({CacheMode.DIST_SYNC, CacheMode.SCATTERED_SYNC})
 public class MultipleNodesLeavingTest extends MultipleCacheManagersTest {
 
    @Override
    protected void createCacheManagers() throws Throwable {
-      createCluster(getDefaultClusteredCacheConfig(CacheMode.DIST_SYNC, false), 4);
+      createCluster(getDefaultClusteredCacheConfig(cacheMode, false), 4);
       waitForClusterToForm();
    }
 
@@ -33,7 +35,7 @@ public class MultipleNodesLeavingTest extends MultipleCacheManagersTest {
       log.trace("MultipleNodesLeavingTest.testMultipleLeaves");
 
       TestingUtil.blockUntilViewsReceived(60000, false, cache(0));
-      TestingUtil.waitForRehashToComplete(cache(0));
+      TestingUtil.waitForNoRebalance(cache(0));
       List<Address> caches = advancedCache(0).getDistributionManager().getWriteConsistentHash().getMembers();
       log.tracef("caches = %s", caches);
       int size = caches.size();

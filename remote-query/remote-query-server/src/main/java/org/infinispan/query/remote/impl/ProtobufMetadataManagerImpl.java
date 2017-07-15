@@ -14,6 +14,7 @@ import javax.management.ObjectName;
 
 import org.infinispan.Cache;
 import org.infinispan.commons.CacheException;
+import org.infinispan.commons.dataconversion.IdentityEncoder;
 import org.infinispan.configuration.cache.CacheMode;
 import org.infinispan.configuration.cache.ConfigurationBuilder;
 import org.infinispan.configuration.global.GlobalConfiguration;
@@ -50,7 +51,7 @@ import org.infinispan.util.concurrent.IsolationLevel;
       description = "Component that acts as a manager and container for Protocol Buffers message type definitions in the scope of a CacheManger.")
 public final class ProtobufMetadataManagerImpl implements ProtobufMetadataManager {
 
-   private Cache<String, String> protobufSchemaCache;
+   private volatile Cache<String, String> protobufSchemaCache;
 
    private ObjectName objectName;
 
@@ -69,6 +70,9 @@ public final class ProtobufMetadataManagerImpl implements ProtobufMetadataManage
       }
    }
 
+   /**
+    * Defines the configuration of the ___protobuf_metadata internal cache.
+    */
    @Inject
    protected void init(EmbeddedCacheManager cacheManager, InternalCacheRegistry internalCacheRegistry) {
       this.cacheManager = cacheManager;
@@ -78,11 +82,22 @@ public final class ProtobufMetadataManagerImpl implements ProtobufMetadataManage
    }
 
    /**
+    * Starts the ___protobuf_metadata when needed. This method must be invoked for each cache that uses protobuf.
+    *
+    * @param dependantCacheName the name of the cache depending on the protobuf metadata cache
+    */
+   protected void addCacheDependency(String dependantCacheName) {
+      protobufSchemaCache = (Cache<String, String>) SecurityActions.getCache(cacheManager, PROTOBUF_METADATA_CACHE_NAME).getAdvancedCache().withEncoding(IdentityEncoder.class);
+      // add stop dependency
+      cacheManager.addCacheDependency(dependantCacheName, ProtobufMetadataManagerImpl.PROTOBUF_METADATA_CACHE_NAME);
+   }
+
+   /**
     * Obtain the cache, lazily.
     */
-   Cache<String, String> getCache() {
+   private Cache<String, String> getCache() {
       if (protobufSchemaCache == null) {
-         protobufSchemaCache = cacheManager.getCache(PROTOBUF_METADATA_CACHE_NAME);
+         throw new IllegalStateException("Not started yet");
       }
       return protobufSchemaCache;
    }

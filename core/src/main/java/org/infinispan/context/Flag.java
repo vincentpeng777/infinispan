@@ -157,8 +157,7 @@ public enum Flag {
    @Deprecated
    REMOVE_DATA_ON_STOP,
    /**
-    * Used by the DistLockingInterceptor to commit the change no matter what (if the flag is set). This is used when
-    * a node A pushes state to another node B and A doesn't want B to check if the state really belongs to it
+    * Ignore current consistent hash and read from data container/commit the change no matter what (if the flag is set).
     */
    SKIP_OWNERSHIP_CHECK,
    /**
@@ -166,7 +165,9 @@ public enum Flag {
     * the object, rather than the full object. This can be useful in order to
     * make decisions such as whether the cache store needs checking to see if
     * the previous value needs to be loaded and merged.
+    * @deprecated since 9.1
     */
+   @Deprecated
    DELTA_WRITE,
 
    /**

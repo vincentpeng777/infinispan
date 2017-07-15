@@ -4,7 +4,7 @@
    <parent>
       <groupId>org.infinispan</groupId>
       <artifactId>infinispan-jcache-parent</artifactId>
-      <version>9.0.1-SNAPSHOT</version>
+      <version>9.1.1-SNAPSHOT</version>
       <relativePath>../pom.xml</relativePath>
    </parent>
 
@@ -22,7 +22,6 @@
       <dependency>
          <groupId>${project.groupId}</groupId>
          <artifactId>infinispan-core</artifactId>
-         <scope>provided</scope>
       </dependency>
 
       <dependency>
@@ -53,7 +52,7 @@
       <dependency>
          <groupId>${project.groupId}</groupId>
          <artifactId>infinispan-cdi-embedded</artifactId>
-         <scope>provided</scope>
+         <optional>true</optional>
       </dependency>
 
       <dependency>
@@ -105,7 +104,8 @@
                   <Include-Resource>
                      {maven-resources},
                      /META-INF/services=${project.basedir}/target/classes/META-INF/services,
-                     /OSGI-INF/blueprint/blueprint.xml=${project.basedir}/target/classes/OSGI-INF/blueprint/blueprint.xml
+                     /OSGI-INF/blueprint/blueprint.xml=${project.basedir}/target/classes/OSGI-INF/blueprint/blueprint.xml,
+                     ${project.build.outputDirectory}/${project.artifactId}-component-metadata.dat
                   </Include-Resource>
                </instructions>
             </configuration>

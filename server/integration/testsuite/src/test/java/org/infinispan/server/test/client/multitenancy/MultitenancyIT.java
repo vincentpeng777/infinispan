@@ -5,8 +5,6 @@ import org.infinispan.arquillian.core.WithRunningServer;
 import org.infinispan.client.hotrod.RemoteCache;
 import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.configuration.ConfigurationBuilder;
-import org.infinispan.server.test.category.ClientSingleNode;
-import org.infinispan.server.test.category.RESTSingleNode;
 import org.infinispan.server.test.category.Security;
 import org.infinispan.server.test.client.rest.RESTHelper;
 import org.infinispan.server.test.util.security.SecurityConfigurationHelper;
@@ -34,7 +32,7 @@ public class MultitenancyIT {
 
    public static final String CACHE_NAME = "cache-1";
 
-   private static RemoteCache<String, String> remoteCache = null;
+   private static RemoteCache<String, Object> remoteCache = null;
    private static RemoteCacheManager remoteCacheManager = null;
    RESTHelper rest;
 

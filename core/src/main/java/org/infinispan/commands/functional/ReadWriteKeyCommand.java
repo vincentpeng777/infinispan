@@ -1,5 +1,6 @@
 package org.infinispan.commands.functional;
 
+import static org.infinispan.commons.util.Util.toStr;
 import static org.infinispan.functional.impl.EntryViews.snapshot;
 
 import java.io.IOException;
@@ -10,7 +11,7 @@ import java.util.function.Function;
 import org.infinispan.commands.CommandInvocationId;
 import org.infinispan.commands.Visitor;
 import org.infinispan.commands.write.ValueMatcher;
-import org.infinispan.commons.api.functional.EntryView.ReadWriteEntryView;
+import org.infinispan.functional.EntryView.ReadWriteEntryView;
 import org.infinispan.commons.marshall.MarshallUtil;
 import org.infinispan.container.entries.CacheEntry;
 import org.infinispan.context.InvocationContext;
@@ -89,11 +90,6 @@ public final class ReadWriteKeyCommand<K, V, R> extends AbstractWriteKeyCommand<
    }
 
    @Override
-   public void updateStatusFromRemoteResponse(Object remoteResponse) {
-      // TODO: Customise this generated block
-   }
-
-   @Override
    public Object acceptVisitor(InvocationContext ctx, Visitor visitor) throws Throwable {
       return visitor.visitReadWriteKeyCommand(ctx, this);
    }
@@ -106,5 +102,18 @@ public final class ReadWriteKeyCommand<K, V, R> extends AbstractWriteKeyCommand<
    @Override
    public Mutation<K, V, ?> toMutation(K key) {
       return new Mutations.ReadWrite<>(f);
+   }
+
+   @Override
+   public String toString() {
+      return "ReadWriteKeyCommand" +
+            "{ key=" + toStr(key) +
+            ", f=" + f +
+            ", flags=" + printFlags() +
+            ", commandInvocationId=" + commandInvocationId +
+            ", params=" + params +
+            ", valueMatcher=" + valueMatcher +
+            ", successful=" + successful +
+            "}";
    }
 }

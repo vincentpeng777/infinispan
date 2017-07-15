@@ -21,6 +21,7 @@ import java.util.function.Supplier;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
+import javax.security.auth.Subject;
 import javax.transaction.TransactionManager;
 import javax.transaction.xa.XAResource;
 
@@ -28,10 +29,15 @@ import org.infinispan.AdvancedCache;
 import org.infinispan.CacheCollection;
 import org.infinispan.CacheSet;
 import org.infinispan.CacheStream;
+import org.infinispan.LockedStream;
 import org.infinispan.Version;
 import org.infinispan.atomic.Delta;
 import org.infinispan.batch.BatchContainer;
 import org.infinispan.commons.api.BasicCacheContainer;
+import org.infinispan.commons.dataconversion.ByteArrayWrapper;
+import org.infinispan.commons.dataconversion.Encoder;
+import org.infinispan.commons.dataconversion.IdentityEncoder;
+import org.infinispan.commons.dataconversion.Wrapper;
 import org.infinispan.commons.util.ByRef;
 import org.infinispan.commons.util.CloseableIterator;
 import org.infinispan.commons.util.CloseableIteratorCollectionAdapter;
@@ -66,6 +72,7 @@ import org.infinispan.jmx.annotations.ManagedAttribute;
 import org.infinispan.jmx.annotations.ManagedOperation;
 import org.infinispan.lifecycle.ComponentStatus;
 import org.infinispan.manager.EmbeddedCacheManager;
+import org.infinispan.marshall.core.EncoderRegistry;
 import org.infinispan.metadata.EmbeddedMetadata;
 import org.infinispan.metadata.Metadata;
 import org.infinispan.notifications.cachelistener.CacheNotifier;
@@ -104,12 +111,20 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
 
    private final static String NULL_KEYS_NOT_SUPPORTED = "Null keys are not supported!";
    private final static String NULL_VALUES_NOT_SUPPORTED = "Null values are not supported!";
-   private final static Class<? extends Annotation>[] FIRED_EVENTS = new Class[] {
+   private final static Class<? extends Annotation>[] FIRED_EVENTS = new Class[]{
          CacheEntryCreated.class, CacheEntryRemoved.class, CacheEntryVisited.class,
          CacheEntryModified.class, CacheEntriesEvicted.class, CacheEntryInvalidated.class,
-         CacheEntryExpired.class };
+         CacheEntryExpired.class};
 
    private final String name;
+   Class<? extends Encoder> keyEncoderClass;
+   Class<? extends Encoder> valueEncoderClass;
+   Class<? extends Wrapper> keyWrapperClass;
+   Class<? extends Wrapper> valueWrapperClass;
+   private Encoder keyEncoder;
+   private Encoder valueEncoder;
+   private Wrapper keyWrapper;
+   private Wrapper valueWrapper;
    private ComponentRegistry componentRegistry;
    private Configuration configuration;
    private EmbeddedCacheManager cacheManager;
@@ -122,7 +137,16 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
    private boolean hasListeners = false;
 
    public SimpleCacheImpl(String cacheName) {
+      this(cacheName, IdentityEncoder.class, IdentityEncoder.class, ByteArrayWrapper.class, ByteArrayWrapper.class);
+   }
+
+   public SimpleCacheImpl(String cacheName, Class<? extends Encoder> keyEncoderClass, Class<? extends Encoder> valueEncoderClass,
+                          Class<? extends Wrapper> keyWrapperClass, Class<? extends Wrapper> valueWrapperClass) {
       this.name = cacheName;
+      this.keyEncoderClass = keyEncoderClass;
+      this.valueEncoderClass = valueEncoderClass;
+      this.keyWrapperClass = keyWrapperClass;
+      this.valueWrapperClass = valueWrapperClass;
    }
 
    @Inject
@@ -131,13 +155,17 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
                                   EmbeddedCacheManager cacheManager,
                                   DataContainer dataContainer,
                                   CacheNotifier cacheNotifier,
-                                  TimeService timeService) {
+                                  TimeService timeService, EncoderRegistry encoderRegistry) {
       this.componentRegistry = componentRegistry;
       this.configuration = configuration;
       this.cacheManager = cacheManager;
       this.dataContainer = dataContainer;
       this.cacheNotifier = cacheNotifier;
       this.timeService = timeService;
+      this.keyEncoder = encoderRegistry.getEncoder(keyEncoderClass);
+      this.valueEncoder = encoderRegistry.getEncoder(valueEncoderClass);
+      this.keyWrapper = encoderRegistry.getWrapper(keyWrapperClass);
+      this.valueWrapper = encoderRegistry.getWrapper(valueWrapperClass);
    }
 
    @Override
@@ -440,8 +468,53 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
    }
 
    @Override
+   public LockedStream<K, V> lockedStream() {
+      throw new UnsupportedOperationException("Simple cache doesn't support lock stream!");
+   }
+
+   @Override
    public void removeExpired(K key, V value, Long lifespan) {
       checkExpiration(getDataContainer().get(key), timeService.wallClockTime());
+   }
+
+   @Override
+   public AdvancedCache<?, ?> withEncoding(Class<? extends Encoder> encoder) {
+      throw new UnsupportedOperationException();
+   }
+
+   @Override
+   public AdvancedCache<?, ?> withEncoding(Class<? extends Encoder> keyEncoder, Class<? extends Encoder> valueEncoder) {
+      throw new UnsupportedOperationException();
+   }
+
+   @Override
+   public AdvancedCache<K, V> withWrapping(Class<? extends Wrapper> wrapper) {
+      throw new UnsupportedOperationException();
+   }
+
+   @Override
+   public AdvancedCache<K, V> withWrapping(Class<? extends Wrapper> keyWrapper, Class<? extends Wrapper> valueWrapper) {
+      throw new UnsupportedOperationException();
+   }
+
+   @Override
+   public Encoder getKeyEncoder() {
+      return keyEncoder;
+   }
+
+   @Override
+   public Encoder getValueEncoder() {
+      return valueEncoder;
+   }
+
+   @Override
+   public Wrapper getKeyWrapper() {
+      return keyWrapper;
+   }
+
+   @Override
+   public Wrapper getValueWrapper() {
+      return valueWrapper;
    }
 
    @Override
@@ -909,8 +982,8 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
 
    @Override
    public <C> void addFilteredListener(Object listener,
-         CacheEventFilter<? super K, ? super V> filter, CacheEventConverter<? super K, ? super V, C> converter,
-         Set<Class<? extends Annotation>> filterAnnotations) {
+                                       CacheEventFilter<? super K, ? super V> filter, CacheEventConverter<? super K, ? super V, C> converter,
+                                       Set<Class<? extends Annotation>> filterAnnotations) {
       cacheNotifier.addFilteredListener(listener, filter, converter, filterAnnotations);
       if (!hasListeners && canFire(listener)) {
          hasListeners = true;
@@ -948,6 +1021,11 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
    public AdvancedCache<K, V> withFlags(Flag... flags) {
       // the flags are mostly ignored
       return this;
+   }
+
+   @Override
+   public AdvancedCache<K, V> withSubject(Subject subject) {
+      return this; // NO-OP
    }
 
    @Override
@@ -1008,6 +1086,11 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
    @Override
    public AuthorizationManager getAuthorizationManager() {
       return getComponentRegistry().getComponent(AuthorizationManager.class);
+   }
+
+   @Override
+   public AdvancedCache<K, V> lockAs(Object lockOwner) {
+      throw new UnsupportedOperationException("lockAs method not supported with Simple Cache!");
    }
 
    @Override
@@ -1117,11 +1200,23 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
    public V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction) {
       Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED);
       ByRef<V> newValueRef = new ByRef<>(null);
-      return computeIfAbsentInternal(key, mappingFunction, newValueRef);
+      return computeIfAbsentInternal(key, mappingFunction, newValueRef, defaultMetadata);
+   }
+
+   @Override
+   public V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction, Metadata metadata) {
+      Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED);
+      ByRef<V> newValueRef = new ByRef<>(null);
+      return computeIfAbsentInternal(key, mappingFunction, newValueRef, metadata);
    }
 
    protected V computeIfAbsentInternal(K key, Function<? super K, ? extends V> mappingFunction, ByRef<V> newValueRef) {
+      return computeIfAbsentInternal(key, mappingFunction, newValueRef, defaultMetadata);
+   }
+
+   private  V computeIfAbsentInternal(K key, Function<? super K, ? extends V> mappingFunction, ByRef<V> newValueRef, Metadata metadata) {
       boolean hasListeners = this.hasListeners;
+      componentRegistry.wireDependencies(mappingFunction);
       InternalCacheEntry<K, V> returnEntry = getDataContainer().compute(key, (k, oldEntry, factory) -> {
          V oldValue = getValue(oldEntry);
          if (oldValue == null) {
@@ -1130,10 +1225,10 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
                return null;
             } else {
                if (hasListeners) {
-                  cacheNotifier.notifyCacheEntryCreated(k, newValue, defaultMetadata, true, ImmutableContext.INSTANCE, null);
+                  cacheNotifier.notifyCacheEntryCreated(k, newValue, metadata, true, ImmutableContext.INSTANCE, null);
                }
                newValueRef.set(newValue);
-               return factory.create(k, newValue, defaultMetadata);
+               return factory.create(k, newValue, metadata);
             }
          } else {
             return oldEntry;
@@ -1141,7 +1236,7 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
       });
       V newValue = newValueRef.get();
       if (hasListeners && newValue != null) {
-         cacheNotifier.notifyCacheEntryCreated(key, newValueRef.get(), defaultMetadata, false, ImmutableContext.INSTANCE, null);
+         cacheNotifier.notifyCacheEntryCreated(key, newValueRef.get(), metadata, false, ImmutableContext.INSTANCE, null);
       }
       return returnEntry == null ? null : returnEntry.getValue();
    }
@@ -1150,11 +1245,23 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
    public V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction) {
       Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED);
       CacheEntryChange<K, V> ref = new CacheEntryChange<>();
-      return computeIfPresentInternal(key, remappingFunction, ref);
+      return computeIfPresentInternal(key, remappingFunction, ref, defaultMetadata);
+   }
+
+   @Override
+   public V computeIfPresent(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction, Metadata metadata) {
+      Objects.requireNonNull(key, NULL_KEYS_NOT_SUPPORTED);
+      CacheEntryChange<K, V> ref = new CacheEntryChange<>();
+      return computeIfPresentInternal(key, remappingFunction, ref, metadata);
    }
 
    protected V computeIfPresentInternal(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction, CacheEntryChange<K, V> ref) {
+      return computeIfPresentInternal(key, remappingFunction, ref, defaultMetadata);
+   }
+
+   private V computeIfPresentInternal(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction, CacheEntryChange<K, V> ref, Metadata metadata) {
       boolean hasListeners = this.hasListeners;
+      componentRegistry.wireDependencies(remappingFunction);
       getDataContainer().compute(key, (k, oldEntry, factory) -> {
          V oldValue = getValue(oldEntry);
          if (oldValue != null) {
@@ -1167,10 +1274,10 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
                return null;
             } else {
                if (hasListeners) {
-                  cacheNotifier.notifyCacheEntryModified(k, newValue, defaultMetadata, oldValue, oldEntry.getMetadata(), true, ImmutableContext.INSTANCE, null);
+                  cacheNotifier.notifyCacheEntryModified(k, newValue, metadata, oldValue, oldEntry.getMetadata(), true, ImmutableContext.INSTANCE, null);
                }
                ref.set(k, newValue, oldValue, oldEntry.getMetadata());
-               return factory.update(oldEntry, newValue, defaultMetadata);
+               return factory.update(oldEntry, newValue, metadata);
             }
          } else {
             return null;
@@ -1179,7 +1286,7 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
       V newValue = ref.getNewValue();
       if (hasListeners) {
          if (newValue != null) {
-            cacheNotifier.notifyCacheEntryModified(ref.getKey(), newValue, defaultMetadata, ref.getOldValue(), ref.getOldMetadata(), false, ImmutableContext.INSTANCE, null);
+            cacheNotifier.notifyCacheEntryModified(ref.getKey(), newValue, metadata, ref.getOldValue(), ref.getOldMetadata(), false, ImmutableContext.INSTANCE, null);
          } else {
             cacheNotifier.notifyCacheEntryRemoved(ref.getKey(), ref.getOldValue(), ref.getOldMetadata(), false, ImmutableContext.INSTANCE, null);
          }
@@ -1190,17 +1297,28 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
    @Override
    public V compute(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction) {
       CacheEntryChange<K, V> ref = new CacheEntryChange<>();
-      return computeInternal(key, remappingFunction, ref);
+      return computeInternal(key, remappingFunction, ref, defaultMetadata);
+   }
+
+   @Override
+   public V compute(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction, Metadata metadata) {
+      CacheEntryChange<K, V> ref = new CacheEntryChange<>();
+      return computeInternal(key, remappingFunction, ref, metadata);
    }
 
    protected V computeInternal(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction, CacheEntryChange<K, V> ref) {
+      return computeInternal(key, remappingFunction, ref, defaultMetadata);
+   }
+
+   private V computeInternal(K key, BiFunction<? super K, ? super V, ? extends V> remappingFunction, CacheEntryChange<K, V> ref, Metadata metadata) {
       boolean hasListeners = this.hasListeners;
+      componentRegistry.wireDependencies(remappingFunction);
       getDataContainer().compute(key, (k, oldEntry, factory) -> {
          V oldValue = getValue(oldEntry);
          V newValue = remappingFunction.apply(k, oldValue);
          return getUpdatedEntry(k, oldEntry, factory, oldValue, newValue, ref, hasListeners);
       });
-      return notifyAndReturn(ref, hasListeners);
+      return notifyAndReturn(ref, hasListeners, metadata);
    }
 
    @Override
@@ -1216,10 +1334,10 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
          V newValue = oldValue == null ? value : remappingFunction.apply(oldValue, value);
          return getUpdatedEntry(k, oldEntry, factory, oldValue, newValue, ref, hasListeners);
       });
-      return notifyAndReturn(ref, hasListeners);
+      return notifyAndReturn(ref, hasListeners, defaultMetadata);
    }
 
-   private V notifyAndReturn(CacheEntryChange<K, V> ref, boolean hasListeners) {
+   private V notifyAndReturn(CacheEntryChange<K, V> ref, boolean hasListeners, Metadata metadata) {
       K key = ref.getKey();
       V newValue = ref.getNewValue();
       if (key != null) {
@@ -1228,9 +1346,9 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
             if (newValue == null) {
                cacheNotifier.notifyCacheEntryRemoved(key, oldValue, ref.getOldMetadata(), false, ImmutableContext.INSTANCE, null);
             } else if (oldValue == null) {
-               cacheNotifier.notifyCacheEntryCreated(key, newValue, defaultMetadata, false, ImmutableContext.INSTANCE, null);
+               cacheNotifier.notifyCacheEntryCreated(key, newValue, metadata, false, ImmutableContext.INSTANCE, null);
             } else {
-               cacheNotifier.notifyCacheEntryModified(key, newValue, defaultMetadata, oldValue, ref.getOldMetadata(), false, ImmutableContext.INSTANCE, null);
+               cacheNotifier.notifyCacheEntryModified(key, newValue, metadata, oldValue, ref.getOldMetadata(), false, ImmutableContext.INSTANCE, null);
             }
          }
       }
@@ -1446,7 +1564,7 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
       @Override
       public CloseableSpliterator<Entry<K, V>> spliterator() {
          return Closeables.spliterator(iterator(), dataContainer.sizeIncludingExpired(),
-                                       Spliterator.CONCURRENT | Spliterator.NONNULL | Spliterator.DISTINCT);
+               Spliterator.CONCURRENT | Spliterator.NONNULL | Spliterator.DISTINCT);
       }
 
       @Override
@@ -1462,13 +1580,13 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
       @Override
       public CacheStream<Entry<K, V>> stream() {
          return cacheStreamCast(new LocalCacheStream<>(new EntryStreamSupplier<>(SimpleCacheImpl.this, null,
-                 getStreamSupplier(false)), false, componentRegistry));
+               getStreamSupplier(false)), false, componentRegistry));
       }
 
       @Override
       public CacheStream<Entry<K, V>> parallelStream() {
          return cacheStreamCast(new LocalCacheStream<>(new EntryStreamSupplier<>(SimpleCacheImpl.this, null,
-                 getStreamSupplier(false)), true, componentRegistry));
+               getStreamSupplier(false)), true, componentRegistry));
       }
    }
 
@@ -1486,7 +1604,7 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
       @Override
       public CloseableSpliterator<CacheEntry<K, V>> spliterator() {
          return Closeables.spliterator(iterator(), dataContainer.sizeIncludingExpired(),
-                                       Spliterator.CONCURRENT | Spliterator.NONNULL | Spliterator.DISTINCT);
+               Spliterator.CONCURRENT | Spliterator.NONNULL | Spliterator.DISTINCT);
       }
 
       @Override
@@ -1502,13 +1620,13 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
       @Override
       public CacheStream<CacheEntry<K, V>> stream() {
          return new LocalCacheStream<>(new EntryStreamSupplier<>(SimpleCacheImpl.this, null, getStreamSupplier(false)),
-                 false, componentRegistry);
+               false, componentRegistry);
       }
 
       @Override
       public CacheStream<CacheEntry<K, V>> parallelStream() {
          return new LocalCacheStream<>(new EntryStreamSupplier<>(SimpleCacheImpl.this, null, getStreamSupplier(true)),
-                 true, componentRegistry);
+               true, componentRegistry);
       }
    }
 
@@ -1584,14 +1702,14 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
       @Override
       public CacheStream<V> stream() {
          LocalCacheStream<CacheEntry<K, V>> lcs = new LocalCacheStream<>(new EntryStreamSupplier<>(SimpleCacheImpl.this,
-                 null, getStreamSupplier(false)), false, componentRegistry);
+               null, getStreamSupplier(false)), false, componentRegistry);
          return lcs.map(CacheEntry::getValue);
       }
 
       @Override
       public CacheStream<V> parallelStream() {
          LocalCacheStream<CacheEntry<K, V>> lcs = new LocalCacheStream<>(new EntryStreamSupplier<>(SimpleCacheImpl.this,
-                 null, getStreamSupplier(false)), true, componentRegistry);
+               null, getStreamSupplier(false)), true, componentRegistry);
          return lcs.map(CacheEntry::getValue);
       }
    }
@@ -1652,21 +1770,21 @@ public class SimpleCacheImpl<K, V> implements AdvancedCache<K, V> {
       public CacheStream<K> stream() {
          Supplier<Stream<CacheEntry<K, V>>> supplier = getStreamSupplier(false);
          return new LocalCacheStream<>(new KeyStreamSupplier<>(SimpleCacheImpl.this, null,
-                 () -> supplier.get().map(CacheEntry::getKey)), false, componentRegistry);
+               () -> supplier.get().map(CacheEntry::getKey)), false, componentRegistry);
       }
 
       @Override
       public CacheStream<K> parallelStream() {
          Supplier<Stream<CacheEntry<K, V>>> supplier = getStreamSupplier(true);
          return new LocalCacheStream<>(new KeyStreamSupplier<>(SimpleCacheImpl.this, null,
-                 () -> supplier.get().map(CacheEntry::getKey)), true, componentRegistry);
+               () -> supplier.get().map(CacheEntry::getKey)), true, componentRegistry);
       }
    }
 
    protected Supplier<Stream<CacheEntry<K, V>>> getStreamSupplier(boolean parallel) {
       CloseableSpliterator<CacheEntry<K, V>> spliterator =
             Closeables.spliterator(Closeables.iterator(dataContainer.iterator()), dataContainer.sizeIncludingExpired(),
-                                   Spliterator.CONCURRENT | Spliterator.NONNULL | Spliterator.DISTINCT);
+                  Spliterator.CONCURRENT | Spliterator.NONNULL | Spliterator.DISTINCT);
       return () -> StreamSupport.stream(spliterator, parallel);
    }
 

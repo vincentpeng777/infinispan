@@ -76,6 +76,15 @@ public class DefaultLockManager implements LockManager {
          log.tracef("Lock key=%s for owner=%s. timeout=%s (%s)", toStr(key), lockOwner, time, unit);
       }
 
+      if (key == lockOwner) {
+         // If the lock is already owned by this lock owner there is no reason to attempt the lock needlessly
+         InfinispanLock lock = lockContainer.getLock(key);
+         if (lock != null && lock.getLockOwner() == key) {
+            log.tracef("Not locking key=%s as it is already held by the same lock owner");
+            return KeyAwareLockPromise.NO_OP;
+         }
+      }
+
       ExtendedLockPromise promise = lockContainer.acquire(key, lockOwner, time, unit);
       return new KeyAwareExtendedLockPromise(promise, key, unit.toMillis(time)).scheduleLockTimeoutTask(scheduler);
    }
@@ -146,7 +155,13 @@ public class DefaultLockManager implements LockManager {
          return;
       }
       for (Object key : keys) {
-         lockContainer.release(key, lockOwner);
+         // If the key is the lock owner that means it was explicitly locked, which can only be unlocked via the single
+         // argument unlock method. This is used by a cache that has the lock owner specifically overridden
+         if (key == lockOwner) {
+            log.tracef("Ignoring key %s as it matches lock owner", key);
+         } else {
+            lockContainer.release(key, lockOwner);
+         }
       }
    }
 

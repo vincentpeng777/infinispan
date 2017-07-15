@@ -6,7 +6,6 @@ import static org.testng.AssertJUnit.fail;
 
 import java.io.IOException;
 import java.util.concurrent.BrokenBarrierException;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -70,7 +69,7 @@ public class OffHeapSingleNodeTest extends OffHeapMultiNodeTest {
 
       barrier.await(10, TimeUnit.SECONDS);
 
-      CompletableFuture<byte[]> putFuture = cache.putAsync(key, randomBytes(VALUE_SIZE));
+      Future<byte[]> putFuture = fork(() -> cache.put(key, randomBytes(VALUE_SIZE)));
       try {
          putFuture.get(1, TimeUnit.SECONDS);
          fail("Should have blocked");
@@ -85,7 +84,7 @@ public class OffHeapSingleNodeTest extends OffHeapMultiNodeTest {
    public void testLotsOfWrites() {
       Cache<String, String> cache = cache(0);
 
-      for (int i = 0; i < 100000; ++i) {
+      for (int i = 0; i < 5_000; ++i) {
          cache.put("key" + i, "value" + i);
       }
 

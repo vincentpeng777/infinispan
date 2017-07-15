@@ -12,8 +12,6 @@ import org.infinispan.commands.FlagAffectedCommand;
 import org.infinispan.commands.tx.VersionedPrepareCommand;
 import org.infinispan.commands.tx.totalorder.TotalOrderPrepareCommand;
 import org.infinispan.commands.write.ClearCommand;
-import org.infinispan.commands.write.InvalidateCommand;
-import org.infinispan.commands.write.RemoveCommand;
 import org.infinispan.commands.write.WriteCommand;
 import org.infinispan.configuration.cache.CacheMode;
 import org.infinispan.configuration.cache.Configuration;
@@ -33,11 +31,11 @@ import org.infinispan.distribution.LocalizedCacheTopology;
 import org.infinispan.factories.annotations.Inject;
 import org.infinispan.factories.scopes.Scope;
 import org.infinispan.factories.scopes.Scopes;
-import org.infinispan.functional.impl.EntryViews;
 import org.infinispan.functional.impl.FunctionalNotifier;
 import org.infinispan.metadata.Metadata;
 import org.infinispan.metadata.impl.L1Metadata;
 import org.infinispan.notifications.cachelistener.CacheNotifier;
+import org.infinispan.notifications.cachelistener.NotifyHelper;
 import org.infinispan.persistence.manager.PersistenceManager;
 import org.infinispan.remoting.transport.Address;
 import org.infinispan.remoting.transport.LocalModeAddress;
@@ -118,8 +116,7 @@ public interface ClusteringDependentLogic {
       return getCacheTopology().getDistribution(key).primary();
    }
 
-   void commitEntry(CacheEntry entry, Metadata metadata, FlagAffectedCommand command, InvocationContext ctx,
-                    Flag trackFlag, boolean l1Invalidation);
+   void commitEntry(CacheEntry entry, FlagAffectedCommand command, InvocationContext ctx, Flag trackFlag, boolean l1Invalidation);
 
    Commit commitType(FlagAffectedCommand command, InvocationContext ctx, Object key, boolean removed);
 
@@ -178,12 +175,12 @@ public interface ClusteringDependentLogic {
       }
 
       @Override
-      public final void commitEntry(CacheEntry entry, Metadata metadata, FlagAffectedCommand command, InvocationContext ctx, Flag trackFlag, boolean l1Invalidation) {
+      public final void commitEntry(CacheEntry entry, FlagAffectedCommand command, InvocationContext ctx, Flag trackFlag, boolean l1Invalidation) {
          if (entry instanceof ClearCacheEntry) {
             //noinspection unchecked
             commitClearCommand(dataContainer, (ClearCacheEntry<Object, Object>) entry, ctx, command);
          } else {
-            commitSingleEntry(entry, metadata, command, ctx, trackFlag, l1Invalidation);
+            commitSingleEntry(entry, command, ctx, trackFlag, l1Invalidation);
          }
       }
 
@@ -191,13 +188,13 @@ public interface ClusteringDependentLogic {
                                       InvocationContext context, FlagAffectedCommand command) {
          List<InternalCacheEntry<Object, Object>> copyEntries = new ArrayList<>(dataContainer.sizeIncludingExpired());
          dataContainer.iterator().forEachRemaining(copyEntries::add);
-         cacheEntry.commit(dataContainer, null);
+         cacheEntry.commit(dataContainer);
          for (InternalCacheEntry entry : copyEntries) {
             notifier.notifyCacheEntryRemoved(entry.getKey(), entry.getValue(), entry.getMetadata(), false, context, command);
          }
       }
 
-      protected abstract void commitSingleEntry(CacheEntry entry, Metadata metadata, FlagAffectedCommand command,
+      protected abstract void commitSingleEntry(CacheEntry entry, FlagAffectedCommand command,
                                                 InvocationContext ctx, Flag trackFlag, boolean l1Invalidation);
 
       @Override
@@ -229,59 +226,6 @@ public interface ClusteringDependentLogic {
       }
 
       protected abstract WriteSkewHelper.KeySpecificLogic initKeySpecificLogic(boolean totalOrder);
-
-      protected void notifyCommitEntry(boolean created, boolean removed, boolean expired, CacheEntry entry,
-              InvocationContext ctx, FlagAffectedCommand command, Object previousValue, Metadata previousMetadata) {
-         boolean isWriteOnly = (command instanceof WriteCommand) && ((WriteCommand) command).isWriteOnly();
-         if (removed) {
-            if (command instanceof RemoveCommand) {
-               ((RemoveCommand) command).notify(ctx, previousValue, previousMetadata, false);
-            } else if (command instanceof InvalidateCommand) {
-               notifier.notifyCacheEntryInvalidated(entry.getKey(), entry.getValue(), entry.getMetadata(), false, ctx, command);
-            } else {
-               if (expired) {
-                  notifier.notifyCacheEntryExpired(entry.getKey(), previousValue, previousMetadata, ctx);
-               } else {
-                  notifier.notifyCacheEntryRemoved(entry.getKey(), previousValue, previousMetadata, false, ctx, command);
-               }
-
-               // A write-only command only writes and so can't 100% guarantee
-               // to be able to retrieve previous value when removed, so only
-               // send remove event when the command is read-write.
-               if (!isWriteOnly)
-                  functionalNotifier.notifyOnRemove(EntryViews.readOnly(entry.getKey(), previousValue, previousMetadata));
-
-               functionalNotifier.notifyOnWrite(() -> EntryViews.noValue(entry.getKey()));
-            }
-         } else {
-            // Notify entry event after container has been updated
-            if (created) {
-               notifier.notifyCacheEntryCreated(
-                     entry.getKey(), entry.getValue(), entry.getMetadata(), false, ctx, command);
-
-               // A write-only command only writes and so can't 100% guarantee
-               // that an entry has been created, so only send create event
-               // when the command is read-write.
-               if (!isWriteOnly)
-                  functionalNotifier.notifyOnCreate(EntryViews.readOnly(entry));
-
-               functionalNotifier.notifyOnWrite(() -> EntryViews.readOnly(entry));
-            } else {
-               notifier.notifyCacheEntryModified(entry.getKey(), entry.getValue(), entry.getMetadata(), previousValue,
-                     previousMetadata, false, ctx, command);
-
-               // A write-only command only writes and so can't 100% guarantee
-               // that an entry has been created, so only send modify when the
-               // command is read-write.
-               if (!isWriteOnly)
-                  functionalNotifier.notifyOnModify(
-                     EntryViews.readOnly(entry.getKey(), previousValue, previousMetadata),
-                     EntryViews.readOnly(entry));
-
-               functionalNotifier.notifyOnWrite(() -> EntryViews.readOnly(entry));
-            }
-         }
-      }
 
       private EntryVersionsMap totalOrderCreateNewVersionsAndCheckForWriteSkews(VersionGenerator versionGenerator, TxInvocationContext context,
                                                                                 VersionedPrepareCommand prepareCommand) {
@@ -362,7 +306,7 @@ public interface ClusteringDependentLogic {
       }
 
       @Override
-      protected void commitSingleEntry(CacheEntry entry, Metadata metadata, FlagAffectedCommand command, InvocationContext ctx,
+      protected void commitSingleEntry(CacheEntry entry, FlagAffectedCommand command, InvocationContext ctx,
                                        Flag trackFlag, boolean l1Invalidation) {
          // Cache flags before they're reset
          // TODO: Can the reset be done after notification instead?
@@ -382,10 +326,11 @@ public interface ClusteringDependentLogic {
             previousValue = previousEntry.getValue();
             previousMetadata = previousEntry.getMetadata();
          }
-         commitManager.commit(entry, metadata, trackFlag, l1Invalidation);
+         commitManager.commit(entry, trackFlag, l1Invalidation, ctx);
 
          // Notify after events if necessary
-         notifyCommitEntry(created, removed, expired, entry, ctx, command, previousValue, previousMetadata);
+         NotifyHelper.entryCommitted(notifier, functionalNotifier, created, removed, expired,
+               entry, ctx, command, previousValue, previousMetadata);
       }
 
       @Override
@@ -400,7 +345,7 @@ public interface ClusteringDependentLogic {
    class InvalidationLogic extends AbstractClusteringDependentLogic {
 
       @Override
-      protected void commitSingleEntry(CacheEntry entry, Metadata metadata, FlagAffectedCommand command,
+      protected void commitSingleEntry(CacheEntry entry, FlagAffectedCommand command,
                                        InvocationContext ctx, Flag trackFlag, boolean l1Invalidation) {
          // Cache flags before they're reset
          // TODO: Can the reset be done after notification instead?
@@ -420,10 +365,11 @@ public interface ClusteringDependentLogic {
             previousValue = previousEntry.getValue();
             previousMetadata = previousEntry.getMetadata();
          }
-         commitManager.commit(entry, metadata, trackFlag, l1Invalidation);
+         commitManager.commit(entry, trackFlag, l1Invalidation, ctx);
 
          // Notify after events if necessary
-         notifyCommitEntry(created, removed, expired, entry, ctx, command, previousValue, previousMetadata);
+         NotifyHelper.entryCommitted(notifier, functionalNotifier, created, removed, expired,
+               entry, ctx, command, previousValue, previousMetadata);
       }
 
       @Override
@@ -460,7 +406,7 @@ public interface ClusteringDependentLogic {
       }
 
       @Override
-      protected void commitSingleEntry(CacheEntry entry, Metadata metadata, FlagAffectedCommand command,
+      protected void commitSingleEntry(CacheEntry entry, FlagAffectedCommand command,
                                        InvocationContext ctx, Flag trackFlag, boolean l1Invalidation) {
          // Don't allow the CH to change (and state transfer to invalidate entries)
          // between the ownership check and the commit
@@ -486,9 +432,10 @@ public interface ClusteringDependentLogic {
                   previousValue = previousEntry.getValue();
                   previousMetadata = previousEntry.getMetadata();
                }
-               commitManager.commit(entry, metadata, trackFlag, l1Invalidation);
+               commitManager.commit(entry, trackFlag, l1Invalidation, ctx);
                if (doCommit.isLocal()) {
-                  notifyCommitEntry(created, removed, expired, entry, ctx, command, previousValue, previousMetadata);
+                  NotifyHelper.entryCommitted(notifier, functionalNotifier, created, removed, expired,
+                        entry, ctx, command, previousValue, previousMetadata);
                }
             }
          } finally {
@@ -524,7 +471,7 @@ public interface ClusteringDependentLogic {
       }
 
       @Override
-      protected void commitSingleEntry(CacheEntry entry, Metadata metadata, FlagAffectedCommand command,
+      protected void commitSingleEntry(CacheEntry entry, FlagAffectedCommand command,
                                        InvocationContext ctx, Flag trackFlag, boolean l1Invalidation) {
          // Don't allow the CH to change (and state transfer to invalidate entries)
          // between the ownership check and the commit
@@ -536,23 +483,12 @@ public interface ClusteringDependentLogic {
             if (!doCommit.isCommit() && configuration.clustering().l1().enabled()) {
                // transform for L1
                if (!entry.isRemoved()) {
-                  long lifespan;
-                  if (metadata != null) {
-                     lifespan = metadata.lifespan();
-                  } else {
-                     lifespan = entry.getLifespan();
-                  }
+                  long lifespan = entry.getLifespan();
                   if (lifespan < 0 || lifespan > configuration.clustering().l1().lifespan()) {
-                     Metadata.Builder builder;
-                     if (metadata != null) {
-                        builder = metadata.builder();
-                     } else {
-                        builder = entry.getMetadata().builder();
-                     }
-                     metadata = builder
+                     Metadata metadata = entry.getMetadata().builder()
                         .lifespan(configuration.clustering().l1().lifespan())
                         .build();
-                     metadata = new L1Metadata(metadata);
+                     entry.setMetadata(new L1Metadata(metadata));
                   }
                }
                isL1Write = true;
@@ -583,9 +519,10 @@ public interface ClusteringDependentLogic {
                   // don't overwrite non-L1 entry with L1 (e.g. when originator == backup
                   // and therefore we have two contexts on one node)
                } else {
-                  commitManager.commit(entry, metadata, trackFlag, l1Invalidation);
+                  commitManager.commit(entry, trackFlag, l1Invalidation, ctx);
                   if (doCommit.isLocal()) {
-                     notifyCommitEntry(created, removed, expired, entry, ctx, command, previousValue, previousMetadata);
+                     NotifyHelper.entryCommitted(notifier, functionalNotifier, created, removed, expired,
+                           entry, ctx, command, previousValue, previousMetadata);
                   }
                }
             }
@@ -601,6 +538,14 @@ public interface ClusteringDependentLogic {
                ? localNodeIsOwner
                //in two phase commit, only the primary owner should perform the write skew check
                : localNodeIsPrimaryOwner;
+      }
+   }
+
+   class ScatteredLogic extends DistributionLogic {
+      @Override
+      protected void commitSingleEntry(CacheEntry entry, FlagAffectedCommand command, InvocationContext ctx, Flag trackFlag, boolean l1Invalidation) {
+         // the logic is in ScatteredDistributionInterceptor
+         throw new UnsupportedOperationException();
       }
    }
 }

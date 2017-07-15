@@ -12,15 +12,17 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.TermQuery;
 import org.hibernate.search.query.engine.spi.HSQuery;
 import org.hibernate.search.spi.CustomTypeMetadata;
+import org.hibernate.search.spi.IndexedTypeIdentifier;
 import org.infinispan.AdvancedCache;
+import org.infinispan.commons.dataconversion.ByteArrayWrapper;
 import org.infinispan.objectfilter.impl.ProtobufMatcher;
 import org.infinispan.objectfilter.impl.syntax.parser.IckleParsingResult;
 import org.infinispan.protostream.descriptors.Descriptor;
 import org.infinispan.query.CacheQuery;
-import org.infinispan.query.dsl.embedded.impl.JPAFilterAndConverter;
+import org.infinispan.query.dsl.embedded.impl.IckleFilterAndConverter;
 import org.infinispan.query.dsl.embedded.impl.RowProcessor;
 import org.infinispan.query.impl.SearchManagerImpl;
-import org.infinispan.query.remote.impl.filter.JPAProtobufFilterAndConverter;
+import org.infinispan.query.remote.impl.filter.IckleProtobufFilterAndConverter;
 import org.infinispan.query.remote.impl.indexing.IndexingMetadata;
 import org.infinispan.query.remote.impl.indexing.ProtobufValueWrapper;
 
@@ -31,7 +33,8 @@ import org.infinispan.query.remote.impl.indexing.ProtobufValueWrapper;
 final class RemoteQueryEngine extends BaseRemoteQueryEngine {
 
    RemoteQueryEngine(AdvancedCache<?, ?> cache, boolean isIndexed) {
-      super(cache, isIndexed, ProtobufMatcher.class, new ProtobufFieldBridgeAndAnalyzerProvider());
+      super(isIndexed ? cache.withWrapping(ByteArrayWrapper.class, ProtostreamWrapper.class) : cache,
+            isIndexed, ProtobufMatcher.class, new ProtobufFieldBridgeAndAnalyzerProvider());
    }
 
    @Override
@@ -72,8 +75,8 @@ final class RemoteQueryEngine extends BaseRemoteQueryEngine {
    protected CacheQuery<?> makeCacheQuery(IckleParsingResult<Descriptor> ickleParsingResult, Query luceneQuery) {
       CustomTypeMetadata customTypeMetadata = new CustomTypeMetadata() {
          @Override
-         public Class<?> getEntityType() {
-            return ProtobufValueWrapper.class;
+         public IndexedTypeIdentifier getEntityType() {
+            return ProtobufValueWrapper.INDEXING_TYPE;
          }
 
          @Override
@@ -87,8 +90,8 @@ final class RemoteQueryEngine extends BaseRemoteQueryEngine {
    }
 
    @Override
-   protected JPAFilterAndConverter createFilter(String queryString, Map<String, Object> namedParameters) {
-      return isIndexed ? new JPAProtobufFilterAndConverter(queryString, namedParameters) :
+   protected IckleFilterAndConverter createFilter(String queryString, Map<String, Object> namedParameters) {
+      return isIndexed ? new IckleProtobufFilterAndConverter(queryString, namedParameters) :
             super.createFilter(queryString, namedParameters);
    }
 

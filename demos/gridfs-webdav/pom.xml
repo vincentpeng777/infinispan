@@ -5,7 +5,7 @@
    <parent>
       <groupId>org.infinispan</groupId>
       <artifactId>infinispan-parent</artifactId>
-      <version>9.0.1-SNAPSHOT</version>
+      <version>9.1.1-SNAPSHOT</version>
       <relativePath>../../parent/pom.xml</relativePath>
    </parent>
    <artifactId>infinispan-gridfs-webdav</artifactId>
@@ -25,6 +25,7 @@
       <dependency>
          <groupId>javax.servlet</groupId>
          <artifactId>servlet-api</artifactId>
+         <version>2.5</version>
          <scope>provided</scope>
       </dependency>
       <dependency>

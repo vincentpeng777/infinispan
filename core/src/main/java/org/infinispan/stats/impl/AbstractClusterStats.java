@@ -14,7 +14,6 @@ import org.infinispan.jmx.annotations.DataType;
 import org.infinispan.jmx.annotations.DisplayType;
 import org.infinispan.jmx.annotations.ManagedAttribute;
 import org.infinispan.jmx.annotations.ManagedOperation;
-import org.infinispan.jmx.annotations.Parameter;
 import org.infinispan.jmx.annotations.Units;
 import org.infinispan.util.TimeService;
 import org.infinispan.util.logging.Log;
@@ -164,7 +163,17 @@ public abstract class AbstractClusterStats implements JmxStatisticsExposer {
    }
 
    void putLongAttributesAverage(List<Map<String, Number>> responseList, String attribute) {
-      long average = addLongAttributes(responseList, attribute) / responseList.size();
+      long nonZeroValues = 0;
+      long total = 0;
+      for (Map<String, Number> m : responseList) {
+         Number value = m.get(attribute);
+         long longValue = value.longValue();
+         if (longValue > 0) {
+            total += longValue;
+            nonZeroValues++;
+         }
+      }
+      long average = nonZeroValues > 0 ? total / nonZeroValues : 0;
       statsMap.put(attribute, average);
    }
 

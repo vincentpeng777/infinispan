@@ -5,7 +5,7 @@
    <parent>
       <groupId>org.infinispan</groupId>
       <artifactId>infinispan-all-parent</artifactId>
-      <version>9.0.1-SNAPSHOT</version>
+      <version>9.1.1-SNAPSHOT</version>
       <relativePath>../pom.xml</relativePath>
    </parent>
 
@@ -63,6 +63,7 @@
          <optional>${uberjar.deps.optional}</optional>
       </dependency>
 
+      
       <dependency>
          <groupId>org.wildfly.core</groupId>
          <artifactId>wildfly-controller-client</artifactId>
@@ -74,14 +75,6 @@
          <artifactId>wildfly-controller</artifactId>
          <optional>${uberjar.deps.optional}</optional>
       </dependency>
-
-      <dependency>
-         <groupId>org.slf4j</groupId>
-         <artifactId>slf4j-api</artifactId>
-         <optional>${uberjar.deps.optional}</optional>
-         <scope>compile</scope>
-      </dependency>
-
    </dependencies>
 
    <build>
@@ -179,7 +172,7 @@
                            </excludes>
                         </filter>
                      </filters>
-                     <createSourcesJar>true</createSourcesJar>
+                     <createSourcesJar>${createSourcesJar}</createSourcesJar>
                      <relocations>
                         <relocation>
                            <pattern>org.apache.commons</pattern>
@@ -193,6 +186,14 @@
                            <pattern>com.google</pattern>
                            <shadedPattern>infinispan.com.google</shadedPattern>
                         </relocation>
+                        
+                        
+                        
+                        
+                        
+                           
+                           
+                        
                         <relocation>
                            <pattern>org.jboss.threads</pattern>
                            <shadedPattern>infinispan.org.jboss.threads</shadedPattern>
@@ -217,6 +218,12 @@
                            <pattern>com.squareup</pattern>
                            <shadedPattern>infinispan.com.squareup</shadedPattern>
                         </relocation>
+                        
+                        
+                        
+                           
+                           
+                        
                      </relocations>
                      <transformers>
                         <transformer implementation="org.apache.maven.plugins.shade.resource.DontIncludeResourceTransformer">
@@ -236,7 +243,6 @@
          <plugin>
             <groupId>org.apache.felix</groupId>
             <artifactId>maven-bundle-plugin</artifactId>
-            <version>2.4.0</version>
             <executions>
                <execution>
                   <id>default-bundle</id>
@@ -278,6 +284,7 @@
                            !org.w3c.*,
                            !org.wildfly.*,
                            !org.xml.*,
+                           !org.apache.logging.log4j.*,
                            *
                         </Import-Package>
                         <DynamicImport-Package>*</DynamicImport-Package>
@@ -289,10 +296,9 @@
          <plugin>
             <groupId>org.codehaus.mojo</groupId>
             <artifactId>build-helper-maven-plugin</artifactId>
-            <version>1.8</version>
             <executions>
                <execution>
-                  <id>attach-artifacts</id>
+                  <id>attach-feature-xml</id>
                   <phase>package</phase>
                   <goals>
                      <goal>attach-artifact</goal>
@@ -304,33 +310,26 @@
                            <type>xml</type>
                            <classifier>features</classifier>
                         </artifact>
+                     </artifacts>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>attach-source-jar</id>
+                  <phase>package</phase>
+                  <goals>
+                     <goal>attach-artifact</goal>
+                  </goals>
+                  <configuration>
+                     <skipAttach>${skipCreateSourcesJar}</skipAttach>
+                     <artifacts>
                         <artifact>
+                           
                            <file>target/${project.build.finalName}-shaded-sources.jar</file>
                            <type>jar</type>
                            <classifier>sources</classifier>
                         </artifact>
                      </artifacts>
                   </configuration>
-               </execution>
-            </executions>
-         </plugin>
-         <plugin>
-            <artifactId>maven-source-plugin</artifactId>
-            <version>2.3</version>
-            <executions>
-               <execution>
-                  <id>attach-sources</id>
-                  <phase>none</phase>
-               </execution>
-            </executions>
-         </plugin>
-         <plugin>
-            <artifactId>maven-jar-plugin</artifactId>
-            <version>2.4</version>
-            <executions>
-               <execution>
-                  <id>build-test-jar</id>
-                  <phase>none</phase>
                </execution>
             </executions>
          </plugin>

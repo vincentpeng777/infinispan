@@ -80,10 +80,13 @@ import org.infinispan.commands.tx.CommitCommand;
 import org.infinispan.commands.tx.PrepareCommand;
 import org.infinispan.commands.tx.RollbackCommand;
 import org.infinispan.commands.tx.TransactionBoundaryCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.RemoveCommand;
 import org.infinispan.commands.write.ReplaceCommand;
 import org.infinispan.commands.write.WriteCommand;
+import org.infinispan.commons.marshall.StreamingMarshaller;
 import org.infinispan.context.InvocationContext;
 import org.infinispan.context.impl.TxInvocationContext;
 import org.infinispan.distribution.DistributionManager;
@@ -142,6 +145,16 @@ public class ExtendedStatisticInterceptor extends BaseCustomAsyncInterceptor {
 
    @Override
    public Object visitReplaceCommand(InvocationContext ctx, ReplaceCommand command) throws Throwable {
+      return visitWriteCommand(ctx, command, command.getKey());
+   }
+
+   @Override
+   public Object visitComputeCommand(InvocationContext ctx, ComputeCommand command) throws Throwable {
+      return visitWriteCommand(ctx, command, command.getKey());
+   }
+
+   @Override
+   public Object visitComputeIfAbsentCommand(InvocationContext ctx, ComputeIfAbsentCommand command) throws Throwable {
       return visitWriteCommand(ctx, command, command.getKey());
    }
 
@@ -829,11 +842,12 @@ public class ExtendedStatisticInterceptor extends BaseCustomAsyncInterceptor {
 
    private void replaceRpcManager(ComponentRegistry componentRegistry) {
       RpcManager oldRpcManager = componentRegistry.getComponent(RpcManager.class);
+      StreamingMarshaller marshaller = componentRegistry.getCacheMarshaller();
       if (oldRpcManager == null) {
          //local mode
          return;
       }
-      RpcManager newRpcManager = new ExtendedStatisticRpcManager(oldRpcManager, cacheStatisticManager, timeService);
+      RpcManager newRpcManager = new ExtendedStatisticRpcManager(oldRpcManager, cacheStatisticManager, timeService, marshaller);
       log.replaceComponent("RpcManager", oldRpcManager, newRpcManager);
       componentRegistry.registerComponent(newRpcManager, RpcManager.class);
       this.rpcManager = newRpcManager;

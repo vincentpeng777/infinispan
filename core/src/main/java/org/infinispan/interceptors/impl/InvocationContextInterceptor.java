@@ -32,6 +32,7 @@ import org.infinispan.statetransfer.OutdatedTopologyException;
 import org.infinispan.transaction.WriteSkewException;
 import org.infinispan.transaction.impl.AbstractCacheTransaction;
 import org.infinispan.transaction.impl.TransactionTable;
+import org.infinispan.util.UserRaisedFunctionalException;
 import org.infinispan.util.logging.Log;
 import org.infinispan.util.logging.LogFactory;
 
@@ -54,6 +55,8 @@ public class InvocationContextInterceptor extends BaseAsyncInterceptor {
       public Object apply(InvocationContext rCtx, VisitableCommand rCommand, Throwable throwable) throws Throwable {
          if (throwable instanceof InvalidCacheUsageException || throwable instanceof InterruptedException) {
             throw throwable;
+         } if (throwable instanceof UserRaisedFunctionalException) {
+            throw throwable.getCause();
          } else {
             rethrowException(rCtx, rCommand, throwable);
          }
@@ -125,7 +128,7 @@ public class InvocationContextInterceptor extends BaseAsyncInterceptor {
             // We log this as DEBUG rather than ERROR - see ISPN-2076
             log.debug("Exception executing call", th);
          } else if (th instanceof OutdatedTopologyException) {
-            log.outdatedTopology(th);
+            log.tracef("Topology changed, notifying the originator: %s", th);
          } else if (th instanceof RetryPrepareException) {
             log.debugf("Retrying total order prepare command for transaction %s, affected keys %s",
                ctx.getLockOwner(), toStr(extractWrittenKeys(ctx, command)));

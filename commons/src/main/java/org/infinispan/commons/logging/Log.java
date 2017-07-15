@@ -111,4 +111,37 @@ public interface Log extends BasicLogger {
    @Message(value = "Multiple errors encountered while validating configuration", id = 919)
    CacheConfigurationException multipleConfigurationValidationErrors();
 
+   @Message(value = "Unable to load file using scheme %s", id = 920)
+   UnsupportedOperationException unableToLoadFileUsingScheme(String scheme);
+
+   @Message(value = "The alias '%s' does not exist in the key store '%s'", id = 921)
+   SecurityException noSuchAliasInKeyStore(String keyAlias, String keyStoreFileName);
+
+   @LogMessage(level = ERROR)
+   @Message(value = "Exception during rollback", id = 922)
+   void errorRollingBack(@Cause Throwable e);
+
+   @LogMessage(level = ERROR)
+   @Message(value = "Error enlisting resource", id = 923)
+   void errorEnlistingResource(@Cause Throwable e);
+
+   @LogMessage(level = ERROR)
+   @Message(value = "beforeCompletion() failed for %s", id = 924)
+   void beforeCompletionFailed(String synchronization, @Cause Throwable t);
+
+   @LogMessage(level = ERROR)
+   @Message(value = "Unexpected error from resource manager!", id = 925)
+   void unexpectedErrorFromResourceManager(@Cause Throwable t);
+
+   @LogMessage(level = ERROR)
+   @Message(value = "afterCompletion() failed for %s", id = 926)
+   void afterCompletionFailed(String synchronization, @Cause Throwable t);
+
+   @LogMessage(level = WARN)
+   @Message(value = "exception while committing", id = 927)
+   void errorCommittingTx(@Cause Throwable e);
+
+   @LogMessage(level = ERROR)
+   @Message(value = "end() failed for %s", id = 928)
+   void xaResourceEndFailed(String xaResource, @Cause Throwable t);
 }

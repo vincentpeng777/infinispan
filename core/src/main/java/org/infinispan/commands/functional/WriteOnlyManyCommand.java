@@ -9,7 +9,7 @@ import java.util.function.Consumer;
 
 import org.infinispan.commands.CommandInvocationId;
 import org.infinispan.commands.Visitor;
-import org.infinispan.commons.api.functional.EntryView.WriteEntryView;
+import org.infinispan.functional.EntryView.WriteEntryView;
 import org.infinispan.commons.marshall.MarshallUtil;
 import org.infinispan.container.entries.CacheEntry;
 import org.infinispan.context.InvocationContext;
@@ -24,18 +24,15 @@ public final class WriteOnlyManyCommand<K, V> extends AbstractWriteManyCommand<K
    private Consumer<WriteEntryView<V>> f;
 
    public WriteOnlyManyCommand(Collection<? extends K> keys, Consumer<WriteEntryView<V>> f, Params params, CommandInvocationId commandInvocationId) {
-      super(commandInvocationId);
+      super(commandInvocationId, params);
       this.keys = keys;
       this.f = f;
-      this.params = params;
    }
 
    public WriteOnlyManyCommand(WriteOnlyManyCommand<K, V> command) {
-      this.commandInvocationId = command.commandInvocationId;
+      super(command);
       this.keys = command.keys;
       this.f = command.f;
-      this.params = command.params;
-      this.flags = command.flags;
    }
 
    public WriteOnlyManyCommand() {

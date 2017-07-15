@@ -4,7 +4,7 @@
    <parent>
       <groupId>org.infinispan</groupId>
       <artifactId>infinispan-parent</artifactId>
-      <version>9.0.1-SNAPSHOT</version>
+      <version>9.1.1-SNAPSHOT</version>
       <relativePath>../../parent/pom.xml</relativePath>
    </parent>
 
@@ -14,9 +14,17 @@
    <description>Infinispan Hot Rod Client</description>
 
    <properties>
-      <infinispan.test.parallel.threads>5</infinispan.test.parallel.threads>
+      <ca.dname>CN=CA,OU=Infinispan,O=JBoss,L=Red Hat</ca.dname>
+      <ca.alias>infinispan-ca</ca.alias>
+      <client.dname>CN=HotRodClient1,OU=Infinispan,O=JBoss,L=Red Hat</client.dname>
+      <client.alias>client1</client.alias>
+      <server.dname>CN=HotRodServer,OU=Infinispan,O=JBoss,L=Red Hat</server.dname>
+      <server.alias>hotrod</server.alias>
+      <client.keystore>${project.build.testOutputDirectory}/keystore_client.jks</client.keystore>
+      <server.keystore>${project.build.testOutputDirectory}/keystore_server.jks</server.keystore>
+      <default.password>secret</default.password>
+      <alt.password>changeme</alt.password>
    </properties>
-
 
    <dependencies>
       <dependency>
@@ -125,7 +133,7 @@
 
       <dependency>
          <groupId>org.mockito</groupId>
-         <artifactId>mockito-all</artifactId>
+         <artifactId>mockito-core</artifactId>
          <scope>test</scope>
       </dependency>
 
@@ -142,6 +150,268 @@
          </resource>
       </resources>
       <plugins>
+         <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+               <systemPropertyVariables combine.self="append">
+                  <io.netty.eventLoopThreads>3</io.netty.eventLoopThreads>
+                  <infinispan.server.hotrod.workerThreads>3</infinispan.server.hotrod.workerThreads>
+               </systemPropertyVariables>
+            </configuration>
+         </plugin>
+         <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>keytool-maven-plugin</artifactId>
+            <executions>
+               
+               <execution>
+                  <id>ca</id>
+                  <goals>
+                     <goal>generateKeyPair</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <dname>${ca.dname}</dname>
+                     <keystore>${project.build.testOutputDirectory}/ca.jks</keystore>
+                     <ext>bc:c</ext>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>ca-export</id>
+                  <goals>
+                     <goal>exportCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <keystore>${project.build.testOutputDirectory}/ca.jks</keystore>
+                     <file>${project.build.testOutputDirectory}/ca.cer</file>
+                  </configuration>
+               </execution>
+               
+               <execution>
+                  <id>server-truststore-import</id>
+                  <goals>
+                     <goal>importCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <file>${project.build.testOutputDirectory}/ca.cer</file>
+                     <keystore>${project.build.testOutputDirectory}/truststore_server.jks</keystore>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>client-truststore-import</id>
+                  <goals>
+                     <goal>importCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <file>${project.build.testOutputDirectory}/ca.cer</file>
+                     <keystore>${project.build.testOutputDirectory}/truststore_client.jks</keystore>
+                  </configuration>
+               </execution>
+               
+               <execution>
+                  <id>client</id>
+                  <goals>
+                     <goal>generateKeyPair</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${client.alias}</alias>
+                     <dname>${client.dname}</dname>
+                     <keystore>${client.keystore}</keystore>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>client-certreq</id>
+                  <goals>
+                     <goal>generateCertificateRequest</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${client.alias}</alias>
+                     <dname>${client.dname}</dname>
+                     <file>${project.build.testOutputDirectory}/client1.csr</file>
+                     <keystore>${client.keystore}</keystore>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>client-gencert</id>
+                  <goals>
+                     <goal>generateCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <keystore>${project.build.testOutputDirectory}/ca.jks</keystore>
+                     <infile>${project.build.testOutputDirectory}/client1.csr</infile>
+                     <outfile>${project.build.testOutputDirectory}/client1.cer</outfile>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>client-import-ca</id>
+                  <goals>
+                     <goal>importCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <file>${project.build.testOutputDirectory}/ca.cer</file>
+                     <keystore>${client.keystore}</keystore>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>client-signed-import</id>
+                  <goals>
+                     <goal>importCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${client.alias}</alias>
+                     <file>${project.build.testOutputDirectory}/client1.cer</file>
+                     <keystore>${client.keystore}</keystore>
+                  </configuration>
+               </execution>
+               
+               <execution>
+                  <id>server</id>
+                  <goals>
+                     <goal>generateKeyPair</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${server.alias}</alias>
+                     <dname>${server.dname}</dname>
+                     <keystore>${server.keystore}</keystore>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>server-certreq</id>
+                  <goals>
+                     <goal>generateCertificateRequest</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${server.alias}</alias>
+                     <dname>${server.dname}</dname>
+                     <file>${project.build.testOutputDirectory}/server.csr</file>
+                     <keystore>${server.keystore}</keystore>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>server-gencert</id>
+                  <goals>
+                     <goal>generateCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <keystore>${project.build.testOutputDirectory}/ca.jks</keystore>
+                     <infile>${project.build.testOutputDirectory}/server.csr</infile>
+                     <outfile>${project.build.testOutputDirectory}/server.cer</outfile>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>server-import-ca</id>
+                  <goals>
+                     <goal>importCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <file>${project.build.testOutputDirectory}/ca.cer</file>
+                     <keystore>${server.keystore}</keystore>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>server-signed-import</id>
+                  <goals>
+                     <goal>importCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${server.alias}</alias>
+                     <file>${project.build.testOutputDirectory}/server.cer</file>
+                     <keystore>${server.keystore}</keystore>
+                  </configuration>
+               </execution>
+               
+               <execution>
+                  <id>client-alt-cert-password</id>
+                  <goals>
+                     <goal>importKeystore</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <srckeystore>${client.keystore}</srckeystore>
+                     <srcalias>${client.alias}</srcalias>
+                     <srcstorepass>${default.password}</srcstorepass>
+                     <srckeypass>${default.password}</srckeypass>
+                     <destkeystore>${project.build.testOutputDirectory}/keystore_client_alt_cert_password.jks</destkeystore>
+                     <deststorepass>${default.password}</deststorepass>
+                     <destkeypass>${alt.password}</destkeypass>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>client-alt-cert-password-ca</id>
+                  <goals>
+                     <goal>importCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <file>${project.build.testOutputDirectory}/ca.cer</file>
+                     <keystore>${project.build.testOutputDirectory}/keystore_client_alt_cert_password.jks</keystore>
+                     <keypass>${alt.password}</keypass>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>server-alt-cert-password</id>
+                  <goals>
+                     <goal>importKeystore</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <srckeystore>${server.keystore}</srckeystore>
+                     <srcalias>${server.alias}</srcalias>
+                     <srcstorepass>${default.password}</srcstorepass>
+                     <srckeypass>${default.password}</srckeypass>
+                     <destkeystore>${project.build.testOutputDirectory}/keystore_server_alt_cert_password.jks</destkeystore>
+                     <deststorepass>${default.password}</deststorepass>
+                     <destkeypass>${alt.password}</destkeypass>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>server-alt-cert-password-ca</id>
+                  <goals>
+                     <goal>importCertificate</goal>
+                  </goals>
+                  <phase>generate-test-resources</phase>
+                  <configuration>
+                     <alias>${ca.alias}</alias>
+                     <file>${project.build.testOutputDirectory}/ca.cer</file>
+                     <keystore>${project.build.testOutputDirectory}/keystore_server_alt_cert_password.jks</keystore>
+                     <keypass>${alt.password}</keypass>
+                  </configuration>
+               </execution>
+            </executions>
+            <configuration>
+               <keyalg>RSA</keyalg>
+               <keysize>2048</keysize>
+               <noprompt>true</noprompt>
+               <storepass>${default.password}</storepass>
+               <keypass>${default.password}</keypass>
+               <trustcacerts>true</trustcacerts>
+               <validity>365</validity>
+               <verbose>true</verbose>
+            </configuration>
+         </plugin>
          <plugin>
             <groupId>org.apache.felix</groupId>
             <artifactId>maven-bundle-plugin</artifactId>
@@ -174,6 +444,28 @@
                            <classifier>features</classifier>
                         </artifact>
                      </artifacts>
+                  </configuration>
+               </execution>
+            </executions>
+         </plugin>
+
+         
+         <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-antrun-plugin</artifactId>
+            <executions>
+               <execution>
+                  <id>clean-key-stores</id>
+                  <phase>process-test-sources</phase>
+                  <goals>
+                     <goal>run</goal>
+                  </goals>
+                  <configuration>
+                     <tasks>
+                        <delete quiet="true">
+                           <fileset dir="${project.build.testOutputDirectory}" includes="*.jks,*.csr,*.cer" />
+                        </delete>
+                     </tasks>
                   </configuration>
                </execution>
             </executions>

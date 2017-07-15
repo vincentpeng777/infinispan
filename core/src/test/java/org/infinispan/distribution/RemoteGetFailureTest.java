@@ -29,7 +29,6 @@ import org.infinispan.container.entries.ImmortalCacheValue;
 import org.infinispan.context.InvocationContext;
 import org.infinispan.context.impl.FlagBitSets;
 import org.infinispan.interceptors.DDAsyncInterceptor;
-import org.infinispan.manager.EmbeddedCacheManager;
 import org.infinispan.remoting.RemoteException;
 import org.infinispan.remoting.inboundhandler.DeliverOrder;
 import org.infinispan.remoting.responses.CacheNotFoundResponse;
@@ -76,7 +75,7 @@ public class RemoteGetFailureTest extends MultipleCacheManagersTest {
       // When we send a ClearCommand from node that does not have a newer view installed to node that has already
       // installed a view without the sender, the message is dropped and the ClearCommand has to time out.
       // Therefore, don't issue the clear command at all.
-      TestingUtil.killCacheManagers(false, cacheManagers.toArray(new EmbeddedCacheManager[cacheManagers.size()]));
+      TestingUtil.killCacheManagers(cacheManagers);
       cacheManagers.clear();
    }
 
@@ -147,8 +146,9 @@ public class RemoteGetFailureTest extends MultipleCacheManagersTest {
 
       // The entry was lost, so we'll get null
       assertNull(future.get());
-      assertEquals(1, thrown.get());
-      assertEquals(1, retried.get());
+      // Since we've lost all owners
+      assertEquals(1, thrown.get()); // OwnersLostException
+      assertEquals(0, retried.get());
       release.countDown();
    }
 

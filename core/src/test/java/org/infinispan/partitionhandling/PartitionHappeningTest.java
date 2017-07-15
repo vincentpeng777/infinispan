@@ -6,13 +6,16 @@ import static org.testng.AssertJUnit.assertTrue;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.infinispan.configuration.cache.CacheMode;
+import org.infinispan.test.fwk.InCacheMode;
 import org.testng.annotations.Test;
 
 @Test(groups = "functional", testName = "partitionhandling.PartitionHappeningTest")
+@InCacheMode({CacheMode.DIST_SYNC, CacheMode.SCATTERED_SYNC })
 public class PartitionHappeningTest extends BasePartitionHandlingTest {
 
    public PartitionHappeningTest() {
-      partitionHandling = false;
+      partitionHandling = PartitionHandling.ALLOW_READ_WRITES;
    }
 
    public void testPartitionHappening() throws Throwable {
@@ -28,7 +31,7 @@ public class PartitionHappeningTest extends BasePartitionHandlingTest {
 
       eventually(() -> {
          for (ViewChangedHandler l : listeners)
-            if (!l.notified) return false;
+            if (!l.isNotified()) return false;
          return true;
       });
 

@@ -7,17 +7,16 @@ import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Set;
 
-import org.infinispan.commons.api.functional.EntryView.ReadEntryView;
-import org.infinispan.commons.api.functional.EntryView.ReadWriteEntryView;
-import org.infinispan.commons.api.functional.EntryView.WriteEntryView;
-import org.infinispan.commons.api.functional.MetaParam;
+import org.infinispan.functional.EntryView.ReadEntryView;
+import org.infinispan.functional.EntryView.ReadWriteEntryView;
+import org.infinispan.functional.EntryView.WriteEntryView;
+import org.infinispan.functional.MetaParam;
 import org.infinispan.commons.marshall.AbstractExternalizer;
 import org.infinispan.commons.marshall.AdvancedExternalizer;
 import org.infinispan.commons.util.Experimental;
 import org.infinispan.commons.util.Util;
 import org.infinispan.container.entries.CacheEntry;
 import org.infinispan.container.versioning.EntryVersion;
-import org.infinispan.container.versioning.FunctionalEntryVersionAdapter;
 import org.infinispan.marshall.core.Ids;
 import org.infinispan.metadata.Metadata;
 
@@ -111,7 +110,7 @@ public final class EntryViews {
       }
 
       @Override
-      public <T> Optional<T> findMetaParam(Class<T> type) {
+      public <T extends MetaParam> Optional<T> findMetaParam(Class<T> type) {
          Metadata metadata = entry.getMetadata();
          if (metadata instanceof MetaParamsInternalMetadata) {
             MetaParamsInternalMetadata metaParamsMetadata = (MetaParamsInternalMetadata) metadata;
@@ -158,7 +157,7 @@ public final class EntryViews {
 
       // TODO: Duplication
       @Override
-      public <T> Optional<T> findMetaParam(Class<T> type) {
+      public <T extends MetaParam> Optional<T> findMetaParam(Class<T> type) {
          if (metadata instanceof MetaParamsInternalMetadata) {
             MetaParamsInternalMetadata metaParamsMetadata = (MetaParamsInternalMetadata) metadata;
             return metaParamsMetadata.findMetaParam(type);
@@ -190,6 +189,7 @@ public final class EntryViews {
       public Void set(V value, MetaParam.Writable... metas) {
          entry.setValue(value);
          entry.setChanged(true);
+         entry.setRemoved(value == null);
          updateMetaParams(entry, metas);
          return null;
       }
@@ -232,8 +232,11 @@ public final class EntryViews {
       }
 
       private void setOnly(V value, MetaParam.Writable[] metas) {
+         entry.setCreated(entry.getValue() == null && value != null);
          entry.setValue(value);
          entry.setChanged(true);
+         entry.setRemoved(value == null);
+
          updateMetaParams(entry, metas);
       }
 
@@ -243,13 +246,14 @@ public final class EntryViews {
             entry.setRemoved(true);
             entry.setChanged(true);
             entry.setValue(null);
+            entry.setCreated(false);
          }
 
          return null;
       }
 
       @Override
-      public <T> Optional<T> findMetaParam(Class<T> type) {
+      public <T extends MetaParam> Optional<T> findMetaParam(Class<T> type) {
          Metadata metadata = entry.getMetadata();
          if (metadata instanceof MetaParamsInternalMetadata) {
             MetaParamsInternalMetadata metaParamsMetadata = (MetaParamsInternalMetadata) metadata;
@@ -305,6 +309,8 @@ public final class EntryViews {
       private void setOnly(V value, MetaParam.Writable[] metas) {
          entry.setValue(value);
          entry.setChanged(true);
+         entry.setRemoved(value == null);
+         entry.setCreated(prevValue == null && value != null);
          updateMetaParams(entry, metas);
       }
 
@@ -312,6 +318,7 @@ public final class EntryViews {
       public Void remove() {
          if (!entry.isNull()) {
             entry.setRemoved(true);
+            entry.setCreated(false);
             entry.setChanged(true);
             entry.setValue(null);
          }
@@ -320,7 +327,7 @@ public final class EntryViews {
       }
 
       @Override
-      public <T> Optional<T> findMetaParam(Class<T> type) {
+      public <T extends MetaParam> Optional<T> findMetaParam(Class<T> type) {
          Metadata metadata = prevMetadata; // Use previous metadata
          if (metadata instanceof MetaParamsInternalMetadata) {
             MetaParamsInternalMetadata metaParamsMetadata = (MetaParamsInternalMetadata) metadata;
@@ -371,7 +378,7 @@ public final class EntryViews {
       }
 
       @Override
-      public <T> Optional<T> findMetaParam(Class<T> type) {
+      public <T extends MetaParam> Optional<T> findMetaParam(Class<T> type) {
          return Optional.empty();
       }
 
@@ -412,7 +419,7 @@ public final class EntryViews {
 
       // TODO: Duplication
       @Override
-      public <T> Optional<T> findMetaParam(Class<T> type) {
+      public <T extends MetaParam> Optional<T> findMetaParam(Class<T> type) {
          if (metadata instanceof MetaParamsInternalMetadata) {
             MetaParamsInternalMetadata metaParamsMetadata = (MetaParamsInternalMetadata) metadata;
             return metaParamsMetadata.findMetaParam(type);
@@ -453,7 +460,7 @@ public final class EntryViews {
       Optional<EntryVersion> version = Optional.ofNullable(entry.getMetadata()).map(m -> m.version());
       MetaParams metaParams = MetaParams.empty();
       if (version.isPresent()) {
-         metaParams.add(new MetaParam.MetaEntryVersion(new FunctionalEntryVersionAdapter(version.get())));
+         metaParams.add(new MetaParam.MetaEntryVersion(version.get()));
       }
       if (metas.length != 0) {
          metaParams.addMany(metas);

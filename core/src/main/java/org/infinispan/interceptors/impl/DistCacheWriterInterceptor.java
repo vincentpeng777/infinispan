@@ -3,9 +3,10 @@ package org.infinispan.interceptors.impl;
 import static org.infinispan.persistence.manager.PersistenceManager.AccessMode.BOTH;
 import static org.infinispan.persistence.manager.PersistenceManager.AccessMode.PRIVATE;
 
-import java.util.Map;
-
 import org.infinispan.commands.FlagAffectedCommand;
+import org.infinispan.commands.VisitableCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.PutMapCommand;
 import org.infinispan.commands.write.RemoveCommand;
@@ -13,7 +14,6 @@ import org.infinispan.commands.write.ReplaceCommand;
 import org.infinispan.context.InvocationContext;
 import org.infinispan.context.impl.FlagBitSets;
 import org.infinispan.distribution.DistributionManager;
-import org.infinispan.distribution.LocalizedCacheTopology;
 import org.infinispan.factories.annotations.Inject;
 import org.infinispan.factories.annotations.Start;
 import org.infinispan.util.logging.Log;
@@ -21,7 +21,7 @@ import org.infinispan.util.logging.LogFactory;
 
 /**
  * Cache store interceptor specific for the distribution and replication cache modes.
- *
+ * <p>
  * <p>If the cache store is shared, only the primary owner of the key writes to the cache store.</p>
  * <p>If the cache store is not shared, every owner of a key writes to the cache store.</p>
  * <p>In non-tx caches, if the originator is an owner, the command is executed there twice. The first time,
@@ -84,26 +84,27 @@ public class DistCacheWriterInterceptor extends CacheWriterInterceptor {
       if (!isStoreEnabled(command) || ctx.isInTxScope())
          return invokeNext(ctx, command);
 
-      return invokeNextThenAccept(ctx, command, (rCtx, rCommand, rv) -> {
-         PutMapCommand putMapCommand = (PutMapCommand) rCommand;
-         LocalizedCacheTopology cacheTopology = dm.getCacheTopology();
-         Map<Object, Object> map = putMapCommand.getMap();
-         int count = 0;
-         for (Object key : map.keySet()) {
-            // In non-tx mode, a node may receive the same forwarded PutMapCommand many times - but each time
-            // it must write only the keys locked on the primary owner that forwarded the command
-            if (isUsingLockDelegation && putMapCommand.isForwarded() &&
-                  !cacheTopology.getDistribution(key).primary().equals(rCtx.getOrigin()))
-               continue;
+      return invokeNextThenAccept(ctx, command, handlePutMapCommandReturn);
+   }
 
-            if (isProperWriter(rCtx, putMapCommand, key)) {
-               storeEntry(rCtx, key, putMapCommand);
-               count++;
-            }
-         }
-         if (getStatisticsEnabled())
-            cacheStores.getAndAdd(count);
-      });
+   @Override
+   protected void handlePutMapCommandReturn(InvocationContext rCtx, VisitableCommand rCommand, Object rv) {
+      PutMapCommand cmd = (PutMapCommand) rCommand;
+      processIterableBatch(rCtx, cmd, BOTH,
+            key -> !skipNonPrimary(rCtx, key, cmd) &&
+                  isProperWriter(rCtx, cmd, key) &&
+                  !skipSharedStores(rCtx, key, cmd));
+
+      processIterableBatch(rCtx, cmd, PRIVATE,
+            key -> !skipNonPrimary(rCtx, key, cmd) &&
+                  isProperWriter(rCtx, cmd, key) &&
+                  skipSharedStores(rCtx, key, cmd));
+   }
+
+   private boolean skipNonPrimary(InvocationContext rCtx, Object key, PutMapCommand command) {
+      // In non-tx mode, a node may receive the same forwarded PutMapCommand many times - but each time
+      // it must write only the keys locked on the primary owner that forwarded the rCommand
+      return isUsingLockDelegation && command.isForwarded() && !dm.getCacheTopology().getDistribution(key).primary().equals(rCtx.getOrigin());
    }
 
    @Override
@@ -137,6 +138,48 @@ public class DistCacheWriterInterceptor extends CacheWriterInterceptor {
             return rv;
 
          storeEntry(rCtx, key, replaceCommand);
+         if (getStatisticsEnabled())
+            cacheStores.incrementAndGet();
+
+         return rv;
+      });
+   }
+
+   @Override
+   public Object visitComputeCommand(InvocationContext ctx, ComputeCommand command) throws Throwable {
+      return invokeNextThenApply(ctx, command, (rCtx, rCommand, rv) -> {
+         ComputeCommand computeCommand = (ComputeCommand) rCommand;
+         Object key = computeCommand.getKey();
+         if (!isStoreEnabled(computeCommand) || rCtx.isInTxScope() || !computeCommand.isSuccessful())
+            return rv;
+         if (!isProperWriter(rCtx, computeCommand, computeCommand.getKey()))
+            return rv;
+
+         if (command.isSuccessful() && rv == null) {
+            boolean resp = persistenceManager
+                  .deleteFromAllStores(key, skipSharedStores(rCtx, key, command) ? PRIVATE : BOTH);
+            if (trace)
+               log.tracef("Removed entry under key %s and got response %s from CacheStore", key, resp);
+         } else if (command.isSuccessful()) {
+            storeEntry(rCtx, key, computeCommand);
+            if (getStatisticsEnabled())
+               cacheStores.incrementAndGet();
+         }
+         return rv;
+      });
+   }
+
+   @Override
+   public Object visitComputeIfAbsentCommand(InvocationContext ctx, ComputeIfAbsentCommand command) throws Throwable {
+      return invokeNextThenApply(ctx, command, (rCtx, rCommand, rv) -> {
+         ComputeIfAbsentCommand computeIfAbsentCommand = (ComputeIfAbsentCommand) rCommand;
+         Object key = computeIfAbsentCommand.getKey();
+         if (!isStoreEnabled(computeIfAbsentCommand) || rCtx.isInTxScope() || !computeIfAbsentCommand.isSuccessful())
+            return rv;
+         if (!isProperWriter(rCtx, computeIfAbsentCommand, computeIfAbsentCommand.getKey()))
+            return rv;
+
+         storeEntry(rCtx, key, computeIfAbsentCommand);
          if (getStatisticsEnabled())
             cacheStores.incrementAndGet();
 

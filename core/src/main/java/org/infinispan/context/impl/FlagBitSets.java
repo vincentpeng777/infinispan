@@ -1,7 +1,9 @@
 package org.infinispan.context.impl;
 
+import org.infinispan.commands.FlagAffectedCommand;
 import org.infinispan.commons.util.EnumUtil;
 import org.infinispan.context.Flag;
+import org.infinispan.context.InvocationContext;
 
 /**
  * Pre-computed bitsets containing each flag.
@@ -27,6 +29,7 @@ public class FlagBitSets {
    public static final long SKIP_SHARED_CACHE_STORE = EnumUtil.bitSetOf(Flag.SKIP_SHARED_CACHE_STORE);
    public static final long REMOVE_DATA_ON_STOP = EnumUtil.bitSetOf(Flag.REMOVE_DATA_ON_STOP);
    public static final long SKIP_OWNERSHIP_CHECK = EnumUtil.bitSetOf(Flag.SKIP_OWNERSHIP_CHECK);
+   @Deprecated
    public static final long DELTA_WRITE = EnumUtil.bitSetOf(Flag.DELTA_WRITE);
    public static final long IGNORE_RETURN_VALUES = EnumUtil.bitSetOf(Flag.IGNORE_RETURN_VALUES);
    public static final long SKIP_XSITE_BACKUP = EnumUtil.bitSetOf(Flag.SKIP_XSITE_BACKUP);
@@ -44,5 +47,21 @@ public class FlagBitSets {
     */
    public static long copyWithoutRemotableFlags(long flagsBitSet) {
       return EnumUtil.diffBitSets(flagsBitSet, FAIL_SILENTLY);
+   }
+
+   public static Flag extractStateTransferFlag(InvocationContext ctx, FlagAffectedCommand command) {
+      if (command == null) {
+         //commit command
+         return ctx instanceof TxInvocationContext ?
+               ((TxInvocationContext) ctx).getCacheTransaction().getStateTransferFlag() :
+               null;
+      } else {
+         if (command.hasAnyFlag(FlagBitSets.PUT_FOR_STATE_TRANSFER)) {
+            return Flag.PUT_FOR_STATE_TRANSFER;
+         } else if (command.hasAnyFlag(FlagBitSets.PUT_FOR_X_SITE_STATE_TRANSFER)) {
+            return Flag.PUT_FOR_X_SITE_STATE_TRANSFER;
+         }
+      }
+      return null;
    }
 }

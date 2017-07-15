@@ -35,12 +35,11 @@ import org.infinispan.objectfilter.impl.syntax.PropertyValueExpr;
 import org.infinispan.objectfilter.impl.syntax.SyntaxTreePrinter;
 import org.infinispan.objectfilter.impl.syntax.ValueExpr;
 import org.infinispan.objectfilter.impl.syntax.parser.AggregationPropertyPath;
-import org.infinispan.objectfilter.impl.syntax.parser.IckleParsingResult;
 import org.infinispan.objectfilter.impl.syntax.parser.IckleParser;
+import org.infinispan.objectfilter.impl.syntax.parser.IckleParsingResult;
 import org.infinispan.objectfilter.impl.syntax.parser.ObjectPropertyHelper;
 import org.infinispan.objectfilter.impl.syntax.parser.RowPropertyHelper;
 import org.infinispan.query.CacheQuery;
-import org.infinispan.query.Search;
 import org.infinispan.query.SearchManager;
 import org.infinispan.query.dsl.Query;
 import org.infinispan.query.dsl.QueryFactory;
@@ -48,8 +47,6 @@ import org.infinispan.query.dsl.impl.BaseQuery;
 import org.infinispan.query.dsl.impl.QueryStringCreator;
 import org.infinispan.query.impl.ComponentRegistryUtils;
 import org.infinispan.query.logging.Log;
-import org.infinispan.security.AuthorizationManager;
-import org.infinispan.security.AuthorizationPermission;
 import org.infinispan.util.logging.LogFactory;
 
 /**
@@ -61,8 +58,6 @@ public class QueryEngine<TypeMetadata> {
    private static final Log log = LogFactory.getLog(QueryEngine.class, Log.class);
 
    private static final int MAX_EXPANSION_COFACTORS = 16;
-
-   private final AuthorizationManager authorizationManager;
 
    protected final AdvancedCache<?, ?> cache;
 
@@ -94,14 +89,13 @@ public class QueryEngine<TypeMetadata> {
     */
    private SearchIntegrator searchFactory;
 
-   private final BooleanFilterNormalizer booleanFilterNormalizer = new BooleanFilterNormalizer();
+   private static final BooleanFilterNormalizer booleanFilterNormalizer = new BooleanFilterNormalizer();
 
    protected QueryEngine(AdvancedCache<?, ?> cache, boolean isIndexed, Class<? extends Matcher> matcherImplClass, LuceneQueryMaker.FieldBridgeAndAnalyzerProvider<TypeMetadata> fieldBridgeAndAnalyzerProvider) {
-      this.cache = cache;
+      this.cache = wrapCache(cache, isIndexed);
       this.isIndexed = isIndexed;
       this.matcherImplClass = matcherImplClass;
       this.queryCache = ComponentRegistryUtils.getQueryCache(cache);
-      this.authorizationManager = SecurityActions.getCacheAuthorizationManager(cache);
       this.matcher = SecurityActions.getCacheComponentRegistry(cache).getComponent(matcherImplClass);
       propertyHelper = ((BaseMatcher<TypeMetadata, ?, ?>) matcher).getPropertyHelper();
       if (fieldBridgeAndAnalyzerProvider == null && propertyHelper instanceof HibernateSearchPropertyHelper) {
@@ -111,12 +105,16 @@ public class QueryEngine<TypeMetadata> {
       }
    }
 
+   protected AdvancedCache<?, ?> wrapCache(AdvancedCache<?, ?> cache, boolean isIndexed) {
+      return cache;
+   }
+
    protected SearchManager getSearchManager() {
       if (!isIndexed) {
          throw new IllegalStateException("Cache is not indexed");
       }
       if (searchManager == null) {
-         searchManager = Search.getSearchManager(cache);
+         searchManager = SecurityActions.getCacheSearchManager(cache);
       }
       return searchManager;
    }
@@ -131,9 +129,6 @@ public class QueryEngine<TypeMetadata> {
    protected BaseQuery buildQuery(QueryFactory queryFactory, IckleParsingResult<TypeMetadata> parsingResult, Map<String, Object> namedParameters, long startOffset, int maxResults) {
       if (log.isDebugEnabled()) {
          log.debugf("Building query '%s' with parameters %s", parsingResult.getQueryString(), namedParameters);
-      }
-      if (authorizationManager != null) {
-         authorizationManager.checkPermission(AuthorizationPermission.BULK_READ);
       }
       BaseQuery query = parsingResult.hasGroupingOrAggregations() ?
             buildQueryWithAggregations(queryFactory, parsingResult.getQueryString(), namedParameters, startOffset, maxResults, parsingResult) :
@@ -208,7 +203,8 @@ public class QueryEngine<TypeMetadata> {
             return new EmptyResultQuery(queryFactory, cache, queryString, namedParameters, startOffset, maxResults);
          }
          if (normalizedHavingClause != ConstantBooleanExpr.TRUE) {
-            havingClause = SyntaxTreePrinter.printTree(swapVariables(normalizedHavingClause, parsingResult.getTargetEntityMetadata(), columns, propertyHelper));
+            havingClause = SyntaxTreePrinter.printTree(swapVariables(normalizedHavingClause, parsingResult.getTargetEntityMetadata(),
+                  columns, namedParameters, propertyHelper));
          }
       }
 
@@ -312,7 +308,7 @@ public class QueryEngine<TypeMetadata> {
     */
    private BooleanExpr swapVariables(BooleanExpr expr, TypeMetadata targetEntityMetadata,
                                      LinkedHashMap<PropertyPath, RowPropertyHelper.ColumnMetadata> columns,
-                                     ObjectPropertyHelper<TypeMetadata> propertyHelper) {
+                                     Map<String, Object> namedParameters, ObjectPropertyHelper<TypeMetadata> propertyHelper) {
       class PropertyReplacer extends ExprVisitor {
 
          @Override
@@ -355,7 +351,7 @@ public class QueryEngine<TypeMetadata> {
 
          @Override
          public BooleanExpr visit(LikeExpr likeExpr) {
-            return new LikeExpr(likeExpr.getChild().acceptVisitor(this), likeExpr.getPattern());
+            return new LikeExpr(likeExpr.getChild().acceptVisitor(this), likeExpr.getPattern(namedParameters));
          }
 
          @Override
@@ -671,19 +667,14 @@ public class QueryEngine<TypeMetadata> {
       return namedParameters != null ? objectFilter.withParameters(namedParameters) : objectFilter;
    }
 
-   protected final JPAFilterAndConverter createAndWireFilter(String queryString, Map<String, Object> namedParameters) {
-      JPAFilterAndConverter filter = createFilter(queryString, namedParameters);
-
-      SecurityActions.doPrivileged(() -> {
-         cache.getComponentRegistry().wireDependencies(filter);
-         return null;
-      });
-
+   protected final IckleFilterAndConverter createAndWireFilter(String queryString, Map<String, Object> namedParameters) {
+      IckleFilterAndConverter filter = createFilter(queryString, namedParameters);
+      SecurityActions.getCacheComponentRegistry(cache).wireDependencies(filter);
       return filter;
    }
 
-   protected JPAFilterAndConverter createFilter(String queryString, Map<String, Object> namedParameters) {
-      return new JPAFilterAndConverter(queryString, namedParameters, matcherImplClass);
+   protected IckleFilterAndConverter createFilter(String queryString, Map<String, Object> namedParameters) {
+      return new IckleFilterAndConverter(queryString, namedParameters, matcherImplClass);
    }
 
    /**

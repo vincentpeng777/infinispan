@@ -6,7 +6,7 @@
     <parent>
         <groupId>org.infinispan</groupId>
         <artifactId>infinispan-parent</artifactId>
-        <version>9.0.1-SNAPSHOT</version>
+        <version>9.1.1-SNAPSHOT</version>
         <relativePath>../parent/pom.xml</relativePath>
     </parent>
 
@@ -16,7 +16,7 @@
     <description>The Infinispan Documentation</description>
 
     <properties>
-        <infinispan.version>9.0</infinispan.version>
+        <infinispan.version>9.1</infinispan.version>
         <javadoc.root>https://docs.jboss.org/infinispan/${infinispan.version}/apidocs</javadoc.root>
         <configdoc.root>https://docs.jboss.org/infinispan/${infinispan.version}/configdocs/</configdoc.root>
         <wildfly.docroot>https://docs.jboss.org/author/display/WFLY10</wildfly.docroot>
@@ -94,6 +94,7 @@
             <plugin>
                 <groupId>org.infinispan</groupId>
                 <artifactId>infinispan-defaults-maven-plugin</artifactId>
+                <version>${project.version}</version>
                 <executions>
                     <execution>
                         <id>extract-defaults</id>
@@ -125,12 +126,12 @@
             <plugin>
                 <groupId>org.asciidoctor</groupId>
                 <artifactId>asciidoctor-maven-plugin</artifactId>
-                <version>1.5.3</version>
+                <version>1.5.5</version>
                 <dependencies>
                     <dependency>
                         <groupId>org.asciidoctor</groupId>
                         <artifactId>asciidoctorj</artifactId>
-                        <version>1.5.4.1</version>
+                        <version>1.5.5</version>
                     </dependency>
                     <dependency>
                         <groupId>org.asciidoctor</groupId>
@@ -232,6 +233,13 @@
                         </configuration>
                     </execution>
                 </executions>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.codehaus.groovy</groupId>
+                        <artifactId>groovy-all</artifactId>
+                        <version>${version.groovy}</version>
+                    </dependency>
+                </dependencies>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

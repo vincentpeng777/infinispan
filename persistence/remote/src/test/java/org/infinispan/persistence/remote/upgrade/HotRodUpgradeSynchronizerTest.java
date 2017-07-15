@@ -2,10 +2,10 @@ package org.infinispan.persistence.remote.upgrade;
 
 import static org.infinispan.client.hotrod.ProtocolVersion.DEFAULT_PROTOCOL_VERSION;
 import static org.infinispan.test.TestingUtil.extractComponent;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Matchers.anyInt;
-import static org.mockito.Matchers.anySetOf;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.when;
 import static org.testng.AssertJUnit.assertEquals;
 import static org.testng.AssertJUnit.assertFalse;
 import static org.testng.AssertJUnit.assertNull;
@@ -27,13 +27,13 @@ import org.testng.annotations.Test;
 @Test(testName = "upgrade.hotrod.HotRodUpgradeSynchronizerTest", groups = "functional")
 public class HotRodUpgradeSynchronizerTest extends AbstractInfinispanTest {
 
-   private TestCluster sourceCluster, targetCluster;
+   protected TestCluster sourceCluster, targetCluster;
 
-   private static final String OLD_CACHE = "old-cache";
-   private static final String TEST_CACHE = HotRodUpgradeSynchronizerTest.class.getName();
+   protected static final String OLD_CACHE = "old-cache";
+   protected static final String TEST_CACHE = HotRodUpgradeSynchronizerTest.class.getName();
 
-   private static final String OLD_PROTOCOL_VERSION = "2.0";
-   private static final String NEW_PROTOCOL_VERSION = DEFAULT_PROTOCOL_VERSION.toString();
+   protected static final String OLD_PROTOCOL_VERSION = "2.0";
+   protected static final String NEW_PROTOCOL_VERSION = DEFAULT_PROTOCOL_VERSION.toString();
 
    @BeforeMethod
    public void setup() throws Exception {
@@ -167,13 +167,13 @@ public class HotRodUpgradeSynchronizerTest extends AbstractInfinispanTest {
          RemoteStore remoteStore = pm.getStores(RemoteStore.class).iterator().next();
          RemoteCacheImpl remoteCache = TestingUtil.extractField(remoteStore, "remoteCache");
          RemoteCacheImpl spy = spy(remoteCache);
-         when(spy.retrieveEntriesWithMetadata(anySetOf(Integer.class), anyInt())).thenAnswer(invocationOnMock -> {
-            Object[] params = invocationOnMock.getArguments();
+         doAnswer(invocation -> {
+            Object[] params = invocation.getArguments();
             CallbackRemoteIterator<Object> remoteCloseableIterator = new CallbackRemoteIterator<>(spy.getOperationsFactory(), (int) params[1], null, true);
             remoteCloseableIterator.addCallback(callback, key);
             remoteCloseableIterator.start();
             return remoteCloseableIterator;
-         });
+         }).when(spy).retrieveEntriesWithMetadata(isNull(), anyInt());
          TestingUtil.replaceField(spy, "remoteCache", remoteStore, RemoteStore.class);
       });
    }

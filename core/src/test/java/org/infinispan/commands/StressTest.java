@@ -23,11 +23,11 @@ public abstract class StressTest extends MultipleCacheManagersTest {
    final BlockingQueue<Throwable> exceptions = new LinkedBlockingDeque<>();
    protected ConfigurationBuilder builderUsed;
 
-   protected Future<Void> forkRestartingThread() {
+   protected Future<Void> forkRestartingThread(int cacheCount) {
       return fork(() -> {
          TestResourceTracker.testThreadStarted(StressTest.this);
          try {
-            Cache<?, ?> cacheToKill = cache(PutMapCommandStressTest.CACHE_COUNT - 1);
+            Cache<?, ?> cacheToKill = cache(cacheCount - 1);
             while (!complete.get()) {
                Thread.sleep(1000);
                if (cacheManagers.remove(cacheToKill.getCacheManager())) {
@@ -36,7 +36,7 @@ public abstract class StressTest extends MultipleCacheManagersTest {
                   List<Cache<Object, Object>> caches = caches(CACHE_NAME);
                   if (caches.size() > 0) {
                      TestingUtil.blockUntilViewsReceived(60000, false, caches);
-                     TestingUtil.waitForRehashToComplete(caches);
+                     TestingUtil.waitForNoRebalance(caches);
                   }
                } else {
                   throw new IllegalStateException("Cache Manager " + cacheToKill.getCacheManager() +
@@ -98,6 +98,7 @@ public abstract class StressTest extends MultipleCacheManagersTest {
                   }
                   System.out.println(Thread.currentThread() + " finished " + iteration + " iterations!");
                } catch (Throwable e) {
+                  log.trace("Failed", e);
                   // Stop all the others as well
                   complete.set(true);
                   exceptions.add(e);

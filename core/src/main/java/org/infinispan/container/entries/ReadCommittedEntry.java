@@ -8,7 +8,6 @@ import static org.infinispan.container.entries.ReadCommittedEntry.Flags.EXPIRED;
 import static org.infinispan.container.entries.ReadCommittedEntry.Flags.REMOVED;
 import static org.infinispan.container.entries.ReadCommittedEntry.Flags.VALID;
 
-import org.infinispan.atomic.impl.AtomicHashMap;
 import org.infinispan.commons.util.Util;
 import org.infinispan.container.DataContainer;
 import org.infinispan.metadata.Metadata;
@@ -91,12 +90,12 @@ public class ReadCommittedEntry implements MVCCEntry {
 
    @Override
    public final long getLifespan() {
-      return metadata.lifespan();
+      return metadata == null ? -1 : metadata.lifespan();
    }
 
    @Override
    public final long getMaxIdle() {
-      return metadata.maxIdle();
+      return metadata == null ? -1 : metadata.maxIdle();
    }
 
    @Override
@@ -115,25 +114,14 @@ public class ReadCommittedEntry implements MVCCEntry {
    }
 
    @Override
-   public final void commit(DataContainer container, Metadata providedMetadata) {
+   public final void commit(DataContainer container) {
       // TODO: No tombstones for now!!  I'll only need them for an eventually consistent cache
 
       // only do stuff if there are changes.
       if (isChanged()) {
          if (trace)
-            log.tracef("Updating entry (key=%s removed=%s valid=%s changed=%s created=%s value=%s metadata=%s, providedMetadata=%s)",
-                  toStr(getKey()), isRemoved(), isValid(), isChanged(), isCreated(), toStr(value), getMetadata(), providedMetadata);
-
-         // Ugh!
-         if (value instanceof AtomicHashMap) {
-            AtomicHashMap<?, ?> ahm = (AtomicHashMap<?, ?>) value;
-            // Removing commit() call should not be an issue.
-            // If marshalling is needed (clustering, or cache store), calling
-            // delta() will clear the delta, avoiding leaking values in delta.
-            // For local caches, using atomic hash maps does not make sense,
-            // so leaking delta values is not so important.
-            if (isRemoved() && !isEvicted()) ahm.markRemoved(true);
-         }
+            log.tracef("Updating entry (key=%s removed=%s valid=%s changed=%s created=%s value=%s metadata=%s)",
+                  toStr(getKey()), isRemoved(), isValid(), isChanged(), isCreated(), toStr(value), getMetadata());
 
          if (isEvicted()) {
             container.evict(key);
@@ -143,7 +131,7 @@ public class ReadCommittedEntry implements MVCCEntry {
             // Can't just rely on the entry's metadata because it could have
             // been modified by the interceptor chain (i.e. new version
             // generated if none provided by the user)
-            container.put(key, value, providedMetadata == null ? metadata : providedMetadata);
+            container.put(key, value, metadata);
          }
       }
    }

@@ -5,7 +5,7 @@
    <parent>
       <groupId>org.infinispan</groupId>
       <artifactId>infinispan-parent</artifactId>
-      <version>9.0.1-SNAPSHOT</version>
+      <version>9.1.1-SNAPSHOT</version>
       <relativePath>../../parent/pom.xml</relativePath>
    </parent>
 
@@ -105,7 +105,7 @@
          <groupId>com.h2database</groupId>
          <artifactId>h2</artifactId>
          <scope>test</scope>
-
+         
          <version>${version.h2.driver-within-wildfly}</version>
       </dependency>
       <dependency>
@@ -156,6 +156,7 @@
                           <version.hibernate.search>${version.hibernate.search}</version.hibernate.search>
                           <version.hibernate.core>${version.hibernate.core}</version.hibernate.core>
                       </systemPropertyVariables>
+                     <argLine>${forkJvmArgs} ${jigsawForkJvmArgs}</argLine>
                   </configuration>
                </execution>
             </executions>

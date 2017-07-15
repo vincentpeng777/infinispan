@@ -12,7 +12,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 import org.antlr.runtime.ANTLRStringStream;
@@ -53,7 +52,7 @@ public class Interpreter {
    private CodecRegistry codecRegistry;
    private TimeService timeService;
 
-   private final Map<String, Session> sessions = new ConcurrentHashMap<String, Session>();
+   private final Map<String, Session> sessions = new ConcurrentHashMap<>();
    private ScheduledFuture<?> sessionReaperTask;
 
    public Interpreter() {
@@ -62,18 +61,13 @@ public class Interpreter {
    @Inject
    public void initialize(final EmbeddedCacheManager cacheManager, TimeService timeService) {
       this.cacheManager = cacheManager;
-      this.codecRegistry = new CodecRegistry(cacheManager.getCacheManagerConfiguration().classLoader());
       this.timeService = timeService;
    }
 
    @Start
    public void start() {
-      this.executor = Executors.newSingleThreadScheduledExecutor(new ThreadFactory() {
-         @Override
-         public Thread newThread(final Runnable r) {
-            return new Thread(r, "Interpreter");
-         }
-      });
+      this.codecRegistry = new CodecRegistry(cacheManager.getCacheManagerConfiguration().classLoader());
+      this.executor = Executors.newSingleThreadScheduledExecutor(r -> new Thread(r, "Interpreter"));
       sessionReaperTask = executor.scheduleWithFixedDelay(new ScheduledTask(), sessionReaperWakeupInterval, sessionReaperWakeupInterval, TimeUnit.MILLISECONDS);
    }
 
@@ -129,7 +123,7 @@ public class Interpreter {
    public Map<String, String> execute(final String sessionId, final String s) throws Exception {
       Session session = null;
       ClassLoader oldCL = SecurityActions.setThreadContextClassLoader(cacheManager.getCacheManagerConfiguration().classLoader());
-      Map<String, String> response = new HashMap<String, String>();
+      Map<String, String> response = new HashMap<>();
       try {
          session = validateSession(sessionId);
 
@@ -175,7 +169,7 @@ public class Interpreter {
    private Session validateSession(final String sessionId) {
       if (sessionId == null) {
          Session session = new SessionImpl(codecRegistry, cacheManager, null, timeService);
-         session.setCurrentCache(BasicCacheContainer.DEFAULT_CACHE_NAME);
+         cacheManager.getCacheManagerConfiguration().defaultCacheName().ifPresent(session::setCurrentCache);
          return session;
       }
       if (!sessions.containsKey(sessionId)) {
@@ -186,7 +180,7 @@ public class Interpreter {
 
    @ManagedAttribute(description = "Retrieves a list of caches for the cache manager")
    public String[] getCacheNames() {
-      Set<String> cacheNames = new HashSet<String>(cacheManager.getCacheNames());
+      Set<String> cacheNames = new HashSet<>(cacheManager.getCacheNames());
       cacheNames.add(BasicCacheContainer.DEFAULT_CACHE_NAME);
       return cacheNames.toArray(new String[0]);
    }

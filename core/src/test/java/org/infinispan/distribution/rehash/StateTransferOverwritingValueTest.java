@@ -1,12 +1,14 @@
 package org.infinispan.distribution.rehash;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyInt;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
 import static org.testng.AssertJUnit.assertEquals;
+import static org.testng.AssertJUnit.assertTrue;
 
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Future;
@@ -17,7 +19,9 @@ import org.infinispan.Cache;
 import org.infinispan.configuration.cache.CacheMode;
 import org.infinispan.configuration.cache.ConfigurationBuilder;
 import org.infinispan.distribution.BlockingInterceptor;
+import org.infinispan.interceptors.DDAsyncInterceptor;
 import org.infinispan.interceptors.impl.EntryWrappingInterceptor;
+import org.infinispan.interceptors.impl.RetryingEntryWrappingInterceptor;
 import org.infinispan.manager.EmbeddedCacheManager;
 import org.infinispan.remoting.rpc.RpcManager;
 import org.infinispan.remoting.transport.Address;
@@ -46,6 +50,7 @@ public class StateTransferOverwritingValueTest extends MultipleCacheManagersTest
          new StateTransferOverwritingValueTest().cacheMode(CacheMode.DIST_SYNC).transactional(false),
          new StateTransferOverwritingValueTest().cacheMode(CacheMode.DIST_SYNC).transactional(true).lockingMode(LockingMode.OPTIMISTIC),
          new StateTransferOverwritingValueTest().cacheMode(CacheMode.DIST_SYNC).transactional(true).lockingMode(LockingMode.PESSIMISTIC),
+         new StateTransferOverwritingValueTest().cacheMode(CacheMode.SCATTERED_SYNC).transactional(false),
       };
    }
 
@@ -123,8 +128,9 @@ public class StateTransferOverwritingValueTest extends MultipleCacheManagersTest
       CheckPoint checkPoint = new CheckPoint();
       ControlledRpcManager blockingRpcManager0 = blockStateResponseCommand(cache0);
 
+      int rebalanceTopologyId = preJoinTopologyId + 1;
       // Block the rebalance confirmation on cache0
-      blockRebalanceConfirmation(manager(0), checkPoint);
+      blockRebalanceConfirmation(manager(0), checkPoint, rebalanceTopologyId);
 
       // Start the joiner
       log.tracef("Starting the cache on the joiner");
@@ -133,7 +139,6 @@ public class StateTransferOverwritingValueTest extends MultipleCacheManagersTest
       addClusterEnabledCacheManager(c);
 
       final AdvancedCache<Object,Object> cache1 = advancedCache(1);
-      int rebalanceTopologyId = preJoinTopologyId + 1;
 
       // Wait for the write CH to contain the joiner everywhere
       eventually(() -> cache0.getRpcManager().getMembers().size() == 2 &&
@@ -143,7 +148,9 @@ public class StateTransferOverwritingValueTest extends MultipleCacheManagersTest
       CyclicBarrier beforeCommitCache1Barrier = new CyclicBarrier(2);
       BlockingInterceptor blockingInterceptor1 = new BlockingInterceptor<>(beforeCommitCache1Barrier,
             op.getCommandClass(), true, false);
-      cache1.getAsyncInterceptorChain().addInterceptorAfter(blockingInterceptor1, EntryWrappingInterceptor.class);
+
+      Class<? extends DDAsyncInterceptor> ewi = cacheMode.isScattered() ? RetryingEntryWrappingInterceptor.class : EntryWrappingInterceptor.class;
+      assertTrue(cache1.getAsyncInterceptorChain().addInterceptorAfter(blockingInterceptor1, ewi));
 
       // Wait for cache0 to collect the state to send to cache1 (including our previous value).
       blockingRpcManager0.waitForCommandToBlock();
@@ -175,7 +182,7 @@ public class StateTransferOverwritingValueTest extends MultipleCacheManagersTest
       // Allow the rebalance confirmation to proceed and wait for the topology to change everywhere
       checkPoint.trigger("resume_rebalance_confirmation_" + rebalanceTopologyId + "_from_" + address(0));
       checkPoint.trigger("resume_rebalance_confirmation_" + rebalanceTopologyId + "_from_" + address(1));
-      TestingUtil.waitForRehashToComplete(cache0, cache1);
+      TestingUtil.waitForNoRebalance(cache0, cache1);
 
       // Check the value on all the nodes
       assertEquals(op.getValue(), cache0.get(key));
@@ -190,7 +197,7 @@ public class StateTransferOverwritingValueTest extends MultipleCacheManagersTest
       return controlledRpcManager;
    }
 
-   private void blockRebalanceConfirmation(final EmbeddedCacheManager manager, final CheckPoint checkPoint)
+   private void blockRebalanceConfirmation(final EmbeddedCacheManager manager, final CheckPoint checkPoint, int rebalanceTopologyId)
          throws Exception {
       ClusterTopologyManager ctm = TestingUtil.extractGlobalComponent(manager, ClusterTopologyManager.class);
       ClusterTopologyManager spyManager = spy(ctm);
@@ -198,11 +205,12 @@ public class StateTransferOverwritingValueTest extends MultipleCacheManagersTest
          Object[] arguments = invocation.getArguments();
          Address source = (Address) arguments[1];
          int topologyId = (Integer) arguments[2];
-         checkPoint.trigger("pre_rebalance_confirmation_" + topologyId + "_from_" + source);
-         checkPoint.awaitStrict("resume_rebalance_confirmation_" + topologyId + "_from_" + source, 10, SECONDS);
+         if (topologyId == rebalanceTopologyId) {
+            checkPoint.trigger("pre_rebalance_confirmation_" + topologyId + "_from_" + source);
+            checkPoint.awaitStrict("resume_rebalance_confirmation_" + topologyId + "_from_" + source, 10, SECONDS);
+         }
          return invocation.callRealMethod();
-      }).when(spyManager).handleRebalanceCompleted(anyString(), any(Address.class), anyInt(), any(Throwable.class),
-            anyInt());
+      }).when(spyManager).handleRebalancePhaseConfirm(anyString(), any(Address.class), anyInt(), isNull(), anyInt());
       TestingUtil.replaceComponent(manager, ClusterTopologyManager.class, spyManager, true);
    }
 }

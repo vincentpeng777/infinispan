@@ -35,11 +35,28 @@
          </hotrod-connector>
       </replacement>
    </supplement>
+   <supplement name="hotrod-rolling-upgrade-ssl">
+      <replacement placeholder="@@default-cache-container@@" attributeValue="local" />
+      <replacement placeholder="CONNECTORS">
+         <hotrod-connector socket-binding="hotrod" cache-container="local">
+            <topology-state-transfer lazy-retrieval="false" lock-timeout="1000" replication-timeout="5000" />
+            <encryption security-realm="ApplicationRealm"/>
+         </hotrod-connector>
+      </replacement>
+   </supplement>
    <supplement name="rest-auth">
       <replacement placeholder="@@default-cache-container@@" attributeValue="local" />
       <replacement placeholder="CONNECTORS">
          <rest-connector socket-binding="rest" cache-container="local">
             <authentication security-realm="ApplicationRealm" auth-method="BASIC" />
+         </rest-connector>
+      </replacement>
+   </supplement>
+   <supplement name="rest-ssl">
+      <replacement placeholder="@@default-cache-container@@" attributeValue="local" />
+      <replacement placeholder="CONNECTORS">
+         <rest-connector socket-binding="rest-ssl" cache-container="local">
+            <encryption security-realm="ApplicationRealm"/>
          </rest-connector>
       </replacement>
    </supplement>

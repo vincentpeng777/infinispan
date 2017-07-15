@@ -10,6 +10,7 @@ import org.infinispan.transaction.TransactionMode;
 import org.junit.Before;
 import org.junit.Test;
 
+// TODO [anistor] remove this test in infinispan 10.0
 /**
  * Tests that undeclared indexed entities are autodetected.
  *
@@ -28,7 +29,7 @@ public class IndexedEntityAutodetectTest extends LocalCacheTest {
             .transactionMode(TransactionMode.TRANSACTIONAL)
             .indexing()
             .index(Index.ALL)
-            .addProperty("default.directory_provider", "ram")
+            .addProperty("default.directory_provider", "local-heap")
             .addProperty("error_handler", "org.infinispan.all.embeddedquery.testdomain.StaticTestingErrorHandler")
             .addProperty("lucene_version", "LUCENE_CURRENT");
 

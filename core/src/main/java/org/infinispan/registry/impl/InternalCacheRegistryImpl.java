@@ -12,7 +12,6 @@ import org.infinispan.configuration.cache.Configuration;
 import org.infinispan.configuration.cache.ConfigurationBuilder;
 import org.infinispan.configuration.global.GlobalConfiguration;
 import org.infinispan.factories.annotations.Inject;
-import org.infinispan.factories.annotations.Stop;
 import org.infinispan.manager.EmbeddedCacheManager;
 import org.infinispan.registry.InternalCacheRegistry;
 import org.infinispan.util.logging.Log;
@@ -33,15 +32,6 @@ public class InternalCacheRegistryImpl implements InternalCacheRegistry {
    @Inject
    public void init(EmbeddedCacheManager cacheManager) {
       this.cacheManager = cacheManager;
-   }
-
-   @Stop(priority = 1)
-   public void stop() {
-      internalCaches.keySet().forEach(cacheName -> {
-         Cache<Object, Object> cache = cacheManager.getCache(cacheName, false);
-         if (cache != null)
-            cache.stop();
-      });
    }
 
    @Override
@@ -71,6 +61,18 @@ public class InternalCacheRegistryImpl implements InternalCacheRegistry {
       internalCaches.put(name, flags);
       if (!flags.contains(Flag.USER)) {
          privateCaches.add(name);
+      }
+   }
+
+   @Override
+   public synchronized void unregisterInternalCache(String name) {
+      if (isInternalCache(name)) {
+         Cache<Object, Object> cache = cacheManager.getCache(name, false);
+         if (cache != null)
+            cache.stop();
+         internalCaches.remove(name);
+         privateCaches.remove(name);
+         SecurityActions.undefineConfiguration(cacheManager, name);
       }
    }
 

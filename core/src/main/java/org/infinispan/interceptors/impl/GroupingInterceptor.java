@@ -48,9 +48,9 @@ public class GroupingInterceptor extends DDAsyncInterceptor {
 
    @Override
    public Object visitGetKeysInGroupCommand(InvocationContext ctx, GetKeysInGroupCommand command) throws Throwable {
-      final String groupName = command.getGroupName();
+      final Object groupName = command.getGroupName();
       //no need to contact the primary owner if we are a backup owner.
-      command.setGroupOwner(distributionManager.getCacheTopology().isWriteOwner(groupName));
+      command.setGroupOwner(distributionManager == null || distributionManager.getCacheTopology().isWriteOwner(groupName));
       if (!command.isGroupOwner() || !isPassivationEnabled) {
          return invokeNextAndFinally(ctx, command, (rCtx, rCommand, rv, t) -> {
             if (rv instanceof List) {
@@ -96,7 +96,7 @@ public class GroupingInterceptor extends DDAsyncInterceptor {
       private final GroupFilter<Object> filter;
       private final InternalEntryFactory factory;
 
-      public KeyListener(String groupName, GroupManager groupManager, InternalEntryFactory factory) {
+      public KeyListener(Object groupName, GroupManager groupManager, InternalEntryFactory factory) {
          this.factory = factory;
          filter = new GroupFilter<>(groupName, groupManager);
          activatedKeys = new ConcurrentLinkedQueue<>();

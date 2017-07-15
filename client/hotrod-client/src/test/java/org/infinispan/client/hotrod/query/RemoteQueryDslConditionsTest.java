@@ -51,6 +51,7 @@ import org.testng.annotations.Test;
 
 /**
  * Test for query conditions (filtering). Exercises the whole query DSL on the sample domain model.
+ * Uses Protobuf marshalling and Protobuf doc annotations for configuring indexing.
  *
  * @author anistor@redhat.com
  * @since 6.0
@@ -143,7 +144,7 @@ public class RemoteQueryDslConditionsTest extends QueryDslConditionsTest {
    protected ConfigurationBuilder getConfigurationBuilder() {
       ConfigurationBuilder builder = hotRodCacheConfiguration();
       builder.indexing().index(Index.ALL)
-            .addProperty("default.directory_provider", "ram")
+            .addProperty("default.directory_provider", "local-heap")
             .addProperty("lucene_version", "LUCENE_CURRENT");
       return builder;
    }
@@ -158,7 +159,7 @@ public class RemoteQueryDslConditionsTest extends QueryDslConditionsTest {
    public void testIndexPresence() {
       SearchIntegrator searchIntegrator = org.infinispan.query.Search.getSearchManager(cache).unwrap(SearchIntegrator.class);
 
-      assertTrue(searchIntegrator.getIndexedTypes().contains(ProtobufValueWrapper.class));
+      assertTrue(searchIntegrator.getIndexBindings().containsKey(ProtobufValueWrapper.class));
       assertNotNull(searchIntegrator.getIndexManager(ProtobufValueWrapper.class.getName()));
    }
 

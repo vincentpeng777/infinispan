@@ -3,7 +3,7 @@ package org.infinispan.statetransfer;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.infinispan.test.TestingUtil.extractComponent;
 import static org.infinispan.test.TestingUtil.findInterceptor;
-import static org.infinispan.test.TestingUtil.waitForRehashToComplete;
+import static org.infinispan.test.TestingUtil.waitForNoRebalance;
 import static org.testng.AssertJUnit.assertEquals;
 import static org.testng.AssertJUnit.assertNull;
 
@@ -69,7 +69,13 @@ public class ReplCommandForwardingTest extends MultipleCacheManagersTest {
       EmbeddedCacheManager cm2 = addClusterEnabledCacheManager(buildConfig(PutKeyValueCommand.class));
       Cache<Object, Object> c2 = cm2.getCache();
       DelayInterceptor di2 = findInterceptor(c2, DelayInterceptor.class);
-      waitForStateTransfer(initialTopologyId + 2, c1, c2);
+      waitForStateTransfer(initialTopologyId + 4, c1, c2);
+
+      // Start a 3rd node, but start a different cache there so that the topology stays the same.
+      // Otherwise the put command blocked on node 1 could block the view message (as both are broadcast by node 0).
+      EmbeddedCacheManager cm3 = addClusterEnabledCacheManager(buildConfig(PutKeyValueCommand.class));
+      cm3.defineConfiguration("differentCache", getDefaultClusteredCacheConfig(CacheMode.REPL_SYNC).build());
+      cm3.getCache("differentCache");
 
       Future<Object> f = fork(() -> {
          log.tracef("Initiating a put command on %s", c1);
@@ -81,11 +87,10 @@ public class ReplCommandForwardingTest extends MultipleCacheManagersTest {
       di1.waitUntilBlocked(1);
       di2.waitUntilBlocked(1);
 
-      // c3 joins, topology id changes
-      EmbeddedCacheManager cm3 = addClusterEnabledCacheManager(buildConfig(PutKeyValueCommand.class));
+      // c3 joins the cache, topology id changes
       Cache<Object, Object> c3 = cm3.getCache();
       DelayInterceptor di3 = findInterceptor(c3, DelayInterceptor.class);
-      waitForStateTransfer(initialTopologyId + 4, c1, c2, c3);
+      waitForStateTransfer(initialTopologyId + 8, c1, c2, c3);
 
       // Unblock the replicated command on c2 and c1
       // Neither cache will forward the command to c3
@@ -110,7 +115,7 @@ public class ReplCommandForwardingTest extends MultipleCacheManagersTest {
    }
 
    private void waitForStateTransfer(int expectedTopologyId, Cache... caches) {
-      waitForRehashToComplete(caches);
+      waitForNoRebalance(caches);
       for (Cache c : caches) {
          CacheTopology cacheTopology = extractComponent(c, StateTransferManager.class).getCacheTopology();
          assertEquals(String.format("Wrong topology on cache %s, expected %d and got %s", c, expectedTopologyId,

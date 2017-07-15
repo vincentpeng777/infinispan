@@ -9,6 +9,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.lucene.search.MatchAllDocsQuery;
+import org.hibernate.search.spi.impl.PojoIndexedTypeIdentifier;
 import org.infinispan.Cache;
 import org.infinispan.configuration.cache.CacheMode;
 import org.infinispan.configuration.cache.ConfigurationBuilder;
@@ -63,7 +64,7 @@ public class AsyncMassIndexPerfTest extends MultipleCacheManagersTest {
    protected void createCacheManagers() throws Throwable {
       ConfigurationBuilder cacheCfg = getDefaultClusteredCacheConfig(CACHE_MODE, TX_ENABLED);
       cacheCfg.clustering().remoteTimeout(120000)
-            .indexing().index(Index.LOCAL)
+            .indexing().index(Index.PRIMARY_OWNER)
             .addIndexedEntity(Transaction.class)
             .addProperty("default.directory_provider", DIRECTORY_PROVIDER.toString())
             .addProperty("default.indexmanager", INDEX_MANAGER.toString())
@@ -140,7 +141,7 @@ public class AsyncMassIndexPerfTest extends MultipleCacheManagersTest {
    }
 
    private enum Provider {
-      RAM("ram"),
+      RAM("local-heap"),
       FILESYSTEM("filesystem"),
       INFINISPAN("infinispan");
       private final String cfg;
@@ -259,7 +260,7 @@ public class AsyncMassIndexPerfTest extends MultipleCacheManagersTest {
    }
 
    private void flushIndex() {
-      new IndexUpdater(cache1).flush(Transaction.class);
+      new IndexUpdater(cache1).flush(new PojoIndexedTypeIdentifier(Transaction.class));
    }
 
    class StopTimer {

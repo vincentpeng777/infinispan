@@ -68,7 +68,7 @@ public class DistStateTransferOnLeaveConsistencyTest extends MultipleCacheManage
       }
 
       // Make it impossible for a key to be owned by nodes 0 and 2
-      consistentHashFactory = new ControlledConsistentHashFactory(new int[]{0, 1}, new int[]{1, 2});
+      consistentHashFactory = new ControlledConsistentHashFactory.Default(new int[]{0, 1}, new int[]{1, 2});
       builder.clustering().hash().numOwners(2).numSegments(2).consistentHashFactory(consistentHashFactory);
       builder.clustering().stateTransfer().fetchInMemoryState(true).awaitInitialTransfer(false);
       builder.clustering().l1().disable().locking().lockAcquisitionTimeout(TestingUtil.shortTimeoutMillis());
@@ -246,7 +246,7 @@ public class DistStateTransferOnLeaveConsistencyTest extends MultipleCacheManage
       applyStateProceedLatch.countDown();
 
       // wait for apply state to end
-      TestingUtil.waitForRehashToComplete(cache(0), cache(2));
+      TestingUtil.waitForNoRebalance(cache(0), cache(2));
 
       // at this point state transfer is fully done
       log.infof("Data container of NodeA has %d keys: %s", dc0.size(), dc0.entrySet());

@@ -64,8 +64,10 @@ public class InboundTransferTask {
 
    private final RpcOptions rpcOptions;
 
-   public InboundTransferTask(Set<Integer> segments, Address source, int topologyId,
-                              RpcManager rpcManager, CommandsFactory commandsFactory, long timeout, String cacheName) {
+   private final boolean applyState;
+
+   public InboundTransferTask(Set<Integer> segments, Address source, int topologyId, RpcManager rpcManager,
+                              CommandsFactory commandsFactory, long timeout, String cacheName, boolean applyState) {
       if (segments == null || segments.isEmpty()) {
          throw new IllegalArgumentException("segments must not be null or empty");
       }
@@ -81,6 +83,7 @@ public class InboundTransferTask {
       this.commandsFactory = commandsFactory;
       this.timeout = timeout;
       this.cacheName = cacheName;
+      this.applyState = applyState;
       //the rpc options does not changed in runtime and they are the same in all the remote invocations. re-use the
       //same instance
       this.rpcOptions = rpcManager.getRpcOptionsBuilder(ResponseMode.SYNCHRONOUS_IGNORE_LEAVERS)
@@ -111,6 +114,14 @@ public class InboundTransferTask {
     * @return a {@code CompletableFuture} that completes when the transfer is done.
     */
    public CompletableFuture<Void> requestSegments() {
+      return startTransfer(applyState ? StateRequestCommand.Type.START_STATE_TRANSFER : StateRequestCommand.Type.START_CONSISTENCY_CHECK);
+   }
+
+   public CompletableFuture<Void> requestKeys() {
+      return startTransfer(StateRequestCommand.Type.START_KEYS_TRANSFER);
+   }
+
+   private CompletableFuture<Void> startTransfer(StateRequestCommand.Type type) {
       if (!isCancelled) {
          Set<Integer> segmentsCopy = getSegments();
          if (segmentsCopy.isEmpty()) {
@@ -119,16 +130,16 @@ public class InboundTransferTask {
             return completionFuture;
          }
          if (trace) {
-            log.tracef("Requesting state from node %s for segments %s", source, segmentsCopy);
+            log.tracef("Requesting state (%s) from node %s for segments %s", type, source, segmentsCopy);
          }
          // start transfer of cache entries
          try {
-            StateRequestCommand cmd = commandsFactory.buildStateRequestCommand(StateRequestCommand.Type.START_STATE_TRANSFER, rpcManager.getAddress(), topologyId, segmentsCopy);
+            StateRequestCommand cmd = commandsFactory.buildStateRequestCommand(type, rpcManager.getAddress(), topologyId, segmentsCopy);
             Map<Address, Response> responses = rpcManager.invokeRemotely(Collections.singleton(source), cmd, rpcOptions);
             Response response = responses.get(source);
             if (response instanceof SuccessfulResponse) {
                if (trace) {
-                  log.tracef("Successfully requested state from node %s for segments %s", source, segmentsCopy);
+                  log.tracef("Successfully requested state (%s) from node %s for segments %s", type, source, segmentsCopy);
                }
                return completionFuture;
             } else {
@@ -199,9 +210,9 @@ public class InboundTransferTask {
    }
 
    private void sendCancelCommand(Set<Integer> cancelledSegments) {
-      StateRequestCommand cmd = commandsFactory.buildStateRequestCommand(
-            StateRequestCommand.Type.CANCEL_STATE_TRANSFER, rpcManager.getAddress(), topologyId,
-            cancelledSegments);
+      StateRequestCommand.Type requestType = applyState ? StateRequestCommand.Type.CANCEL_STATE_TRANSFER : StateRequestCommand.Type.CANCEL_CONSISTENCY_CHECK;
+      StateRequestCommand cmd = commandsFactory.buildStateRequestCommand(requestType, rpcManager.getAddress(),
+            topologyId, cancelledSegments);
       try {
          rpcManager.invokeRemotely(Collections.singleton(source), cmd, rpcManager.getDefaultRpcOptions(false));
       } catch (Exception e) {

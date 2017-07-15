@@ -16,6 +16,7 @@ import org.infinispan.Version;
 import org.infinispan.commands.ReplicableCommand;
 import org.infinispan.commons.CacheException;
 import org.infinispan.distribution.ch.ConsistentHash;
+import org.infinispan.distribution.ch.ConsistentHashFactory;
 import org.infinispan.eviction.PassivationManager;
 import org.infinispan.executors.LimitedExecutor;
 import org.infinispan.factories.ComponentRegistry;
@@ -198,11 +199,11 @@ public class LocalTopologyManagerImpl implements LocalTopologyManager, GlobalSta
    }
 
    @Override
-   public void confirmRebalance(String cacheName, int topologyId, int rebalanceId, Throwable throwable) {
+   public void confirmRebalancePhase(String cacheName, int topologyId, int rebalanceId, Throwable throwable) {
       // Note that if the coordinator changes again after we sent the command, we will get another
       // query for the status of our running caches. So we don't need to retry if the command failed.
       ReplicableCommand command = new CacheTopologyControlCommand(cacheName,
-            CacheTopologyControlCommand.Type.REBALANCE_CONFIRM, transport.getAddress(),
+            CacheTopologyControlCommand.Type.REBALANCE_PHASE_CONFIRM, transport.getAddress(),
             topologyId, rebalanceId, throwable, transport.getViewId());
       try {
          executeOnCoordinatorAsync(command);
@@ -256,19 +257,10 @@ public class LocalTopologyManagerImpl implements LocalTopologyManager, GlobalSta
    @Override
    public void handleTopologyUpdate(final String cacheName, final CacheTopology cacheTopology,
          final AvailabilityMode availabilityMode, final int viewId, final Address sender) throws InterruptedException {
-      if (!running) {
-         log.tracef("Ignoring consistent hash update %s for cache %s, the local cache manager is not running",
-               cacheTopology.getTopologyId(), cacheName);
+      if (ignoreTopologyUpdate(cacheName, cacheTopology))
          return;
-      }
 
       final LocalCacheStatus cacheStatus = runningCaches.get(cacheName);
-      if (cacheStatus == null) {
-         log.tracef("Ignoring consistent hash update %s for cache %s that doesn't exist locally",
-               cacheTopology.getTopologyId(), cacheName);
-         return;
-      }
-
       cacheStatus.getTopologyUpdatesExecutor().execute(() -> {
          try {
             doHandleTopologyUpdate(cacheName, cacheTopology, availabilityMode, viewId, sender, cacheStatus);
@@ -276,6 +268,21 @@ public class LocalTopologyManagerImpl implements LocalTopologyManager, GlobalSta
             log.topologyUpdateError(cacheName, t);
          }
       });
+   }
+
+   private boolean ignoreTopologyUpdate(final String cacheName, final CacheTopology cacheTopology) {
+      if (!running) {
+         log.tracef("Ignoring consistent hash update %s for cache %s, the local cache manager is not running",
+               cacheTopology.getTopologyId(), cacheName);
+         return true;
+      }
+
+      if (runningCaches.get(cacheName) == null) {
+         log.tracef("Ignoring consistent hash update %s for cache %s that doesn't exist locally",
+               cacheTopology.getTopologyId(), cacheName);
+         return true;
+      }
+      return false;
    }
 
    /**
@@ -314,22 +321,41 @@ public class LocalTopologyManagerImpl implements LocalTopologyManager, GlobalSta
          if (!updateCacheTopology(cacheName, cacheTopology, viewId, sender, cacheStatus))
             return false;
 
+         ConsistentHash currentCH = cacheTopology.getCurrentCH();
          ConsistentHash unionCH = null;
          if (cacheTopology.getPendingCH() != null) {
-            unionCH = cacheStatus.getJoinInfo().getConsistentHashFactory().union(cacheTopology.getCurrentCH(),
-                  cacheTopology.getPendingCH());
+            ConsistentHashFactory chf = cacheStatus.getJoinInfo().getConsistentHashFactory();
+            switch (cacheTopology.getPhase()) {
+               case READ_NEW_WRITE_ALL:
+                  // When removing members from topology, we have to make sure that the unionCH has
+                  // owners from pendingCH (which is used as the readCH in this phase) before
+                  // owners from currentCH, as primary owners must match in readCH and writeCH.
+                  unionCH = chf.union(cacheTopology.getPendingCH(), cacheTopology.getCurrentCH());
+                  break;
+               case CONFLICT_RESOLUTION:
+                  // Ensure that this node utilises it's old partitions readConsistentHash during conflict resolution
+                  // But has an updated write consistent hash which contains owners from the pre and post merge hashes
+                  unionCH = chf.union(existingTopology.getWriteConsistentHash(), cacheTopology.getPendingCH());
+                  currentCH = existingTopology.getCurrentCH();
+                  break;
+               default:
+                  unionCH = chf.union(cacheTopology.getCurrentCH(), cacheTopology.getPendingCH());
+            }
          }
 
          CacheTopology unionTopology = new CacheTopology(cacheTopology.getTopologyId(), cacheTopology.getRebalanceId(),
-               cacheTopology.getCurrentCH(), cacheTopology.getPendingCH(), unionCH, cacheTopology.getActualMembers(),
-               persistentUUIDManager.mapAddresses(cacheTopology.getActualMembers()));
+               currentCH, cacheTopology.getPendingCH(), unionCH, cacheTopology.getPhase(),
+               cacheTopology.getActualMembers(), persistentUUIDManager.mapAddresses(cacheTopology.getActualMembers()));
          unionTopology.logRoutingTableInformation();
 
          boolean updateAvailabilityModeFirst = availabilityMode != AvailabilityMode.AVAILABLE;
          if (updateAvailabilityModeFirst && availabilityMode != null) {
             cacheStatus.getPartitionHandlingManager().setAvailabilityMode(availabilityMode);
          }
-         if ((existingTopology == null || existingTopology.getRebalanceId() != cacheTopology.getRebalanceId()) && unionCH != null) {
+
+         boolean startConflictResolution = cacheTopology.getPhase() == CacheTopology.Phase.CONFLICT_RESOLUTION;
+         if (!startConflictResolution && (existingTopology == null || existingTopology.getRebalanceId() != cacheTopology.getRebalanceId())
+               && unionCH != null) {
             // This CH_UPDATE command was sent after a REBALANCE_START command, but arrived first.
             // We will start the rebalance now and ignore the REBALANCE_START command when it arrives.
             log.tracef("This topology update has a pending CH, starting the rebalance now");
@@ -407,7 +433,8 @@ public class LocalTopologyManagerImpl implements LocalTopologyManager, GlobalSta
             // The currentCH changed, we need to install a "reset" topology with the new currentCH first
             registerPersistentUUID(newCacheTopology);
             CacheTopology resetTopology = new CacheTopology(newCacheTopology.getTopologyId() - 1,
-                  newCacheTopology.getRebalanceId() - 1, newCacheTopology.getCurrentCH(), null, newCacheTopology.getActualMembers(), persistentUUIDManager.mapAddresses(newCacheTopology.getActualMembers()));
+                  newCacheTopology.getRebalanceId() - 1, newCacheTopology.getCurrentCH(), null,
+                  CacheTopology.Phase.NO_REBALANCE, newCacheTopology.getActualMembers(), persistentUUIDManager.mapAddresses(newCacheTopology.getActualMembers()));
             log.debugf("Installing fake cache topology %s for cache %s", resetTopology, cacheName);
             handler.updateConsistentHash(resetTopology);
          }
@@ -487,16 +514,15 @@ public class LocalTopologyManagerImpl implements LocalTopologyManager, GlobalSta
 
          log.debugf("Starting local rebalance for cache %s, topology = %s", cacheName, cacheTopology);
          cacheTopology.logRoutingTableInformation();
-         cacheStatus.setCurrentTopology(cacheTopology);
 
          CacheTopologyHandler handler = cacheStatus.getHandler();
          resetLocalTopologyBeforeRebalance(cacheName, cacheTopology, existingTopology, handler);
 
          ConsistentHash unionCH = cacheStatus.getJoinInfo().getConsistentHashFactory().union(
                cacheTopology.getCurrentCH(), cacheTopology.getPendingCH());
-         CacheTopology newTopology = new CacheTopology(cacheTopology.getTopologyId(), cacheTopology
-               .getRebalanceId(),
-               cacheTopology.getCurrentCH(), cacheTopology.getPendingCH(), unionCH, cacheTopology.getActualMembers(), cacheTopology.getMembersPersistentUUIDs());
+         CacheTopology newTopology = new CacheTopology(cacheTopology.getTopologyId(), cacheTopology.getRebalanceId(),
+               cacheTopology.getCurrentCH(), cacheTopology.getPendingCH(), unionCH, cacheTopology.getPhase(),
+               cacheTopology.getActualMembers(), cacheTopology.getMembersPersistentUUIDs());
          handler.rebalance(newTopology);
       }
    }
@@ -652,7 +678,9 @@ public class LocalTopologyManagerImpl implements LocalTopologyManager, GlobalSta
       cacheState.setProperty(GlobalStateManagerImpl.VERSION_MAJOR, Version.getMajor());
       LocalCacheStatus cacheStatus = runningCaches.get(cacheName);
       cacheStatus.getCurrentTopology().getCurrentCH().remapAddresses(persistentUUIDManager.addressToPersistentUUID()).toScopedState(cacheState);
-      globalStateManager.writeScopedState(cacheState);
+      if (globalStateManager != null) {
+         globalStateManager.writeScopedState(cacheState);
+      }
    }
 
    private Object executeOnCoordinator(ReplicableCommand command, long timeout) throws Exception {

@@ -19,7 +19,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
-import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -31,6 +31,7 @@ import org.infinispan.commons.util.SmallIntSet;
 import org.infinispan.configuration.cache.CacheMode;
 import org.infinispan.configuration.cache.Configuration;
 import org.infinispan.configuration.cache.ConfigurationBuilder;
+import org.infinispan.conflict.impl.InternalConflictManager;
 import org.infinispan.container.DataContainer;
 import org.infinispan.container.entries.ImmortalCacheEntry;
 import org.infinispan.container.entries.InternalCacheEntry;
@@ -56,6 +57,7 @@ import org.infinispan.remoting.transport.Transport;
 import org.infinispan.test.AbstractInfinispanTest;
 import org.infinispan.test.TestingUtil;
 import org.infinispan.topology.CacheTopology;
+import org.infinispan.topology.LocalTopologyManager;
 import org.infinispan.topology.PersistentUUID;
 import org.infinispan.topology.PersistentUUIDManager;
 import org.infinispan.topology.PersistentUUIDManagerImpl;
@@ -126,12 +128,13 @@ public class StateConsumerTest extends AbstractInfinispanTest {
       when(cache.getName()).thenReturn("testCache");
       when(cache.getStatus()).thenReturn(ComponentStatus.RUNNING);
 
-      pooledExecutorService = new ThreadPoolExecutor(10, 20, 0L,
-                                                     TimeUnit.MILLISECONDS, new LinkedBlockingDeque<>(),
+      pooledExecutorService = new ThreadPoolExecutor(0, 20, 0L,
+                                                     TimeUnit.MILLISECONDS, new SynchronousQueue<>(),
                                                      getTestThreadFactory("Worker"),
                                                      new ThreadPoolExecutor.CallerRunsPolicy());
 
       StateTransferManager stateTransferManager = mock(StateTransferManager.class);
+      LocalTopologyManager localTopologyManager = mock(LocalTopologyManager.class);
       CacheNotifier cacheNotifier = mock(CacheNotifier.class);
       RpcManager rpcManager = mock(RpcManager.class);
       Transport transport = mock(Transport.class);
@@ -144,6 +147,7 @@ public class StateConsumerTest extends AbstractInfinispanTest {
       InvocationContextFactory icf = mock(InvocationContextFactory.class);
       TotalOrderManager totalOrderManager = mock(TotalOrderManager.class);
       BlockingTaskAwareExecutorService remoteCommandsExecutor = mock(BlockingTaskAwareExecutorService.class);
+      InternalConflictManager conflictManager = mock(InternalConflictManager.class);
 
       when(commandsFactory.buildStateRequestCommand(any(StateRequestCommand.Type.class), any(Address.class), anyInt(), any(SmallIntSet.class)))
          .thenAnswer(invocation-> new StateRequestCommand(ByteString.fromString("cache1"),
@@ -185,10 +189,10 @@ public class StateConsumerTest extends AbstractInfinispanTest {
 
       // create state provider
       final StateConsumerImpl stateConsumer = new StateConsumerImpl();
-      stateConsumer.init(cache, pooledExecutorService, stateTransferManager, interceptorChain, icf, configuration, rpcManager, null,
+      stateConsumer.init(cache, pooledExecutorService, stateTransferManager, localTopologyManager, interceptorChain, icf, configuration, rpcManager, null,
                          commandsFactory, persistenceManager, dataContainer, transactionTable, stateTransferLock, cacheNotifier,
                          totalOrderManager, remoteCommandsExecutor, new CommitManager(), new CommandAckCollector(), new TriangleOrderManager(0), null,
-                         new HashFunctionPartitioner());
+                         new HashFunctionPartitioner(), conflictManager);
       stateConsumer.start();
 
       final List<InternalCacheEntry> cacheEntries = new ArrayList<>();
@@ -203,11 +207,12 @@ public class StateConsumerTest extends AbstractInfinispanTest {
       assertFalse(stateConsumer.hasActiveTransfers());
 
       // node 4 leaves
-      stateConsumer.onTopologyUpdate(new CacheTopology(1, 1, ch2, null, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers())), false);
+      stateConsumer.onTopologyUpdate(new CacheTopology(1, 1, ch2, null, CacheTopology.Phase.NO_REBALANCE, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers())), false);
       assertFalse(stateConsumer.hasActiveTransfers());
 
       // start a rebalance
-      stateConsumer.onTopologyUpdate(new CacheTopology(2, 2, ch2, ch3, ch23, ch23.getMembers(), persistentUUIDManager.mapAddresses(ch23.getMembers())), true);
+      stateConsumer.onTopologyUpdate(new CacheTopology(2, 2, ch2, ch3, ch23, CacheTopology.Phase.READ_OLD_WRITE_ALL,
+            ch23.getMembers(), persistentUUIDManager.mapAddresses(ch23.getMembers())), true);
       assertTrue(stateConsumer.hasActiveTransfers());
 
       // check that all segments have been requested
@@ -219,17 +224,18 @@ public class StateConsumerTest extends AbstractInfinispanTest {
 
       // simulate a cluster state recovery and return to ch2
       Future<Object> future = fork(() -> {
-         stateConsumer.onTopologyUpdate(new CacheTopology(3, 2, ch2, null, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers())), false);
+         stateConsumer.onTopologyUpdate(new CacheTopology(3, 2, ch2, null, CacheTopology.Phase.NO_REBALANCE, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers())), false);
          return null;
       });
-      stateConsumer.onTopologyUpdate(new CacheTopology(3, 2, ch2, null, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers())), false);
+      stateConsumer.onTopologyUpdate(new CacheTopology(3, 2, ch2, null, CacheTopology.Phase.NO_REBALANCE, ch2.getMembers(), persistentUUIDManager.mapAddresses(ch2.getMembers())), false);
       future.get();
       assertFalse(stateConsumer.hasActiveTransfers());
 
 
       // restart the rebalance
       requestedSegments.clear();
-      stateConsumer.onTopologyUpdate(new CacheTopology(4, 4, ch2, ch3, ch23, ch23.getMembers(), persistentUUIDManager.mapAddresses(ch23.getMembers())), true);
+      stateConsumer.onTopologyUpdate(new CacheTopology(4, 4, ch2, ch3, ch23, CacheTopology.Phase.READ_OLD_WRITE_ALL,
+            ch23.getMembers(), persistentUUIDManager.mapAddresses(ch23.getMembers())), true);
       assertTrue(stateConsumer.hasActiveTransfers());
       assertEquals(flatRequestedSegments, newSegments);
 
@@ -238,7 +244,7 @@ public class StateConsumerTest extends AbstractInfinispanTest {
       for (Integer segment : newSegments) {
          stateChunks.add(new StateChunk(segment, Collections.emptyList(), true));
       }
-      stateConsumer.applyState(addresses[1], 2, stateChunks);
+      stateConsumer.applyState(addresses[1], 2, false, stateChunks);
 
       stateConsumer.stop();
       assertFalse(stateConsumer.hasActiveTransfers());

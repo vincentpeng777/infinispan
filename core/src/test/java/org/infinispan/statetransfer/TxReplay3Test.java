@@ -1,9 +1,10 @@
 package org.infinispan.statetransfer;
 
+import static org.infinispan.test.TestingUtil.wrapInboundInvocationHandler;
 import static org.infinispan.test.TestingUtil.wrapComponent;
-import static org.infinispan.test.TestingUtil.wrapPerCacheInboundInvocationHandler;
 import static org.testng.AssertJUnit.assertEquals;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -64,8 +65,7 @@ public class TxReplay3Test extends MultipleCacheManagersTest {
 
       wrapComponent(cache(1), RpcManager.class,
                     (wrapOn, current) -> new UnsureResponseRpcManager(current, sequencer), true);
-      Handler handler = wrapPerCacheInboundInvocationHandler(cache(0),
-                                                             (wrapOn, current) -> new Handler(current, sequencer), true);
+      Handler handler = wrapInboundInvocationHandler(cache(0), current -> new Handler(current, sequencer));
       handler.setOrigin(address(cache(2)));
 
       Future<Void> tx1 = fork(() -> {
@@ -107,7 +107,7 @@ public class TxReplay3Test extends MultipleCacheManagersTest {
       builder.clustering()
             .remoteTimeout(1, TimeUnit.MINUTES)
             .hash().numOwners(1).numSegments(1)
-            .consistentHashFactory(new ControlledConsistentHashFactory(0))
+            .consistentHashFactory(new ControlledConsistentHashFactory.Default(0))
             .stateTransfer().fetchInMemoryState(false);
       return builder;
    }
@@ -134,21 +134,21 @@ public class TxReplay3Test extends MultipleCacheManagersTest {
       protected Map<Address, Response> afterInvokeRemotely(ReplicableCommand command, Map<Address, Response> responseMap, Object argument) {
          Map<Address, Response> result = super.afterInvokeRemotely(command, responseMap, argument);
          log.debugf("After invoke remotely %s. Responses=%s", command, result);
-         if (!triggered && command instanceof PrepareCommand) {
-            log.debugf("Triggering %s and %s", TX1_LOCKED, TX1_UNSURE);
-            triggered = true;
-            try {
-               sequencer.advance(TX1_LOCKED);
-               sequencer.advance(TX1_UNSURE);
-            } catch (TimeoutException | InterruptedException e) {
-               throw new CacheException(e);
-            }
-            for (Map.Entry<Address, Response> entry : result.entrySet()) {
-               entry.setValue(UnsureResponse.INSTANCE);
-            }
-            log.debugf("After invoke remotely %s. New Responses=%s", command, result);
+         if (triggered || !(command instanceof PrepareCommand))
+            return result;
+
+         log.debugf("Triggering %s and %s", TX1_LOCKED, TX1_UNSURE);
+         triggered = true;
+         try {
+            sequencer.advance(TX1_LOCKED);
+            sequencer.advance(TX1_UNSURE);
+         } catch (TimeoutException | InterruptedException e) {
+            throw new CacheException(e);
          }
-         return result;
+         Map<Address, Response> newResult = new HashMap<>();
+         result.forEach((address, response) -> newResult.put(address, UnsureResponse.INSTANCE));
+         log.debugf("After invoke remotely %s. New Responses=%s", command, newResult);
+         return newResult;
       }
    }
 

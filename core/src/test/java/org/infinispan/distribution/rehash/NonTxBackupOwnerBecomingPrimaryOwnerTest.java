@@ -4,13 +4,16 @@ import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyInt;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 import static org.testng.AssertJUnit.assertEquals;
 import static org.testng.AssertJUnit.assertFalse;
 import static org.testng.AssertJUnit.assertNotNull;
+import static org.testng.AssertJUnit.assertTrue;
 
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -21,8 +24,12 @@ import org.infinispan.commons.api.BasicCacheContainer;
 import org.infinispan.configuration.cache.CacheMode;
 import org.infinispan.configuration.cache.ConfigurationBuilder;
 import org.infinispan.context.impl.FlagBitSets;
+import org.infinispan.commands.write.PutKeyValueCommand;
+import org.infinispan.context.InvocationContext;
 import org.infinispan.distribution.BlockingInterceptor;
+import org.infinispan.interceptors.DDAsyncInterceptor;
 import org.infinispan.interceptors.distribution.TriangleDistributionInterceptor;
+import org.infinispan.interceptors.impl.EntryWrappingInterceptor;
 import org.infinispan.manager.CacheContainer;
 import org.infinispan.manager.EmbeddedCacheManager;
 import org.infinispan.partitionhandling.AvailabilityMode;
@@ -36,7 +43,6 @@ import org.infinispan.topology.CacheTopology;
 import org.infinispan.topology.LocalTopologyManager;
 import org.infinispan.transaction.TransactionMode;
 import org.infinispan.util.BaseControlledConsistentHashFactory;
-import org.mockito.Mockito;
 import org.testng.annotations.Test;
 
 /**
@@ -116,8 +122,17 @@ public class NonTxBackupOwnerBecomingPrimaryOwnerTest extends MultipleCacheManag
       // Add a new member and block the rebalance before the final topology is installed
       ConfigurationBuilder c = getConfigurationBuilder();
       c.clustering().stateTransfer().awaitInitialTransfer(false);
+      CountDownLatch stateTransferLatch = new CountDownLatch(1);
+      if (op.getPreviousValue() != null) {
+         c.customInterceptors().addInterceptor()
+               .before(EntryWrappingInterceptor.class)
+               .interceptor(new StateTransferLatchInterceptor(stateTransferLatch));
+      } else {
+         stateTransferLatch.countDown();
+      }
       addClusterEnabledCacheManager(c);
       addBlockingLocalTopologyManager(manager(2), checkPoint, preJoinTopologyId);
+
 
       log.tracef("Starting the cache on the joiner");
       final AdvancedCache<Object,Object> cache2 = advancedCache(2);
@@ -137,6 +152,10 @@ public class NonTxBackupOwnerBecomingPrimaryOwnerTest extends MultipleCacheManag
       assertNotNull(duringJoinTopology.getPendingCH());
       log.tracef("Rebalance started. Found key %s with current owners %s and pending owners %s", key,
             duringJoinTopology.getCurrentCH().locateOwners(key), duringJoinTopology.getPendingCH().locateOwners(key));
+
+      // We need to wait for the state transfer to insert the entry before inserting the blocking interceptor;
+      // otherwise we could block the PUT_FOR_STATE_TRANSFER instead
+      stateTransferLatch.await(10, TimeUnit.SECONDS);
 
       // Every operation command will be blocked before reaching the distribution interceptor on cache1
       CyclicBarrier beforeCache1Barrier = new CyclicBarrier(2);
@@ -158,14 +177,16 @@ public class NonTxBackupOwnerBecomingPrimaryOwnerTest extends MultipleCacheManag
       afterCache2Barrier.await(10, TimeUnit.SECONDS);
       afterCache2Barrier.await(10, TimeUnit.SECONDS);
 
-      // Allow the topology update to proceed on all the caches
-      int postJoinTopologyId = duringJoinTopologyId + 1;
-      checkPoint.trigger("allow_topology_" + postJoinTopologyId + "_on_" + address(0));
-      checkPoint.trigger("allow_topology_" + postJoinTopologyId + "_on_" + address(1));
-      checkPoint.trigger("allow_topology_" + postJoinTopologyId + "_on_" + address(2));
+      // Allow the topology updates to proceed on all the caches
+      for (int i = 1; i <= 3; ++i) {
+         int postJoinTopologyId = duringJoinTopologyId + i;
+         checkPoint.trigger("allow_topology_" + postJoinTopologyId + "_on_" + address(0));
+         checkPoint.trigger("allow_topology_" + postJoinTopologyId + "_on_" + address(1));
+         checkPoint.trigger("allow_topology_" + postJoinTopologyId + "_on_" + address(2));
+      }
 
       // Wait for the topology to change everywhere
-      TestingUtil.waitForRehashToComplete(cache0, cache1, cache2);
+      TestingUtil.waitForNoRebalance(cache0, cache1, cache2);
 
       // Allow the put command to throw an OutdatedTopologyException on cache1
       log.tracef("Unblocking the put command on node " + address(1));
@@ -202,7 +223,7 @@ public class NonTxBackupOwnerBecomingPrimaryOwnerTest extends MultipleCacheManag
       return op.perform(cache0, key);
    }
 
-   private static class CustomConsistentHashFactory extends BaseControlledConsistentHashFactory {
+   private static class CustomConsistentHashFactory extends BaseControlledConsistentHashFactory.Default {
       private CustomConsistentHashFactory() {
          super(1);
       }
@@ -223,18 +244,35 @@ public class NonTxBackupOwnerBecomingPrimaryOwnerTest extends MultipleCacheManag
                                                 final int currentTopologyId)
          throws InterruptedException {
       LocalTopologyManager component = TestingUtil.extractGlobalComponent(manager, LocalTopologyManager.class);
-      LocalTopologyManager spyLtm = Mockito.spy(component);
+      LocalTopologyManager spyLtm = spy(component);
       doAnswer(invocation -> {
          CacheTopology topology = (CacheTopology) invocation.getArguments()[1];
          // Ignore the first topology update on the joiner, which is with the topology before the join
          if (topology.getTopologyId() != currentTopologyId) {
             checkPoint.trigger("pre_topology_" + topology.getTopologyId() + "_on_" + manager.getAddress());
-            checkPoint.await("allow_topology_" + topology.getTopologyId() + "_on_" + manager.getAddress(),
-                  10, TimeUnit.SECONDS);
+            assertTrue(checkPoint.await("allow_topology_" + topology.getTopologyId() + "_on_" + manager.getAddress(),
+                  10, TimeUnit.SECONDS));
          }
          return invocation.callRealMethod();
       }).when(spyLtm).handleTopologyUpdate(eq(CacheContainer.DEFAULT_CACHE_NAME), any(CacheTopology.class),
                                            any(AvailabilityMode.class), anyInt(), any(Address.class));
       TestingUtil.extractGlobalComponentRegistry(manager).registerComponent(spyLtm, LocalTopologyManager.class);
+   }
+
+   private class StateTransferLatchInterceptor extends DDAsyncInterceptor {
+      private final CountDownLatch latch;
+
+      private StateTransferLatchInterceptor(CountDownLatch latch) {
+         this.latch = latch;
+      }
+
+      @Override
+      public Object visitPutKeyValueCommand(InvocationContext ctx, PutKeyValueCommand command) throws Throwable {
+         return invokeNextAndFinally(ctx, command, (rCtx, rCommand, rv, throwable) -> {
+            if (((PutKeyValueCommand) rCommand).hasAnyFlag(FlagBitSets.PUT_FOR_STATE_TRANSFER)) {
+               latch.countDown();
+            }
+         });
+      }
    }
 }

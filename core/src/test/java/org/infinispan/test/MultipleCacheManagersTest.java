@@ -39,6 +39,7 @@ import org.infinispan.remoting.transport.Address;
 import org.infinispan.test.fwk.InCacheMode;
 import org.infinispan.test.fwk.InTransactionMode;
 import org.infinispan.test.fwk.TestCacheManagerFactory;
+import org.infinispan.test.fwk.TestResourceTracker;
 import org.infinispan.test.fwk.TestSelector;
 import org.infinispan.test.fwk.TransportFlags;
 import org.infinispan.transaction.LockingMode;
@@ -122,7 +123,10 @@ public abstract class MultipleCacheManagersTest extends AbstractCacheTest {
 
    @AfterClass(alwaysRun = true)
    protected void destroy() {
-      if (cleanupAfterTest()) TestingUtil.killCacheManagers(cacheManagers);
+      if (cleanupAfterTest()) {
+         TestingUtil.clearContent(cacheManagers);
+         TestingUtil.killCacheManagers(cacheManagers);
+      }
       cacheManagers.clear();
       listeners.clear();
    }
@@ -136,7 +140,9 @@ public abstract class MultipleCacheManagersTest extends AbstractCacheTest {
             throw new IllegalStateException("No caches registered! Use registerCacheManager(Cache... caches) to do that!");
          TestingUtil.clearContent(cacheManagers);
       } else {
-         TestingUtil.killCacheManagers(true, cacheManagers.toArray(new EmbeddedCacheManager[cacheManagers.size()]));
+         TestingUtil.clearContent(cacheManagers);
+         TestingUtil.killCacheManagers(cacheManagers);
+         TestResourceTracker.cleanUpResources(getTestName());
          cacheManagers.clear();
       }
    }
@@ -263,7 +269,7 @@ public abstract class MultipleCacheManagersTest extends AbstractCacheTest {
       Cache<Object, Object> cache = caches.get(0);
       TestingUtil.blockUntilViewsReceived(30000, caches);
       if (cache.getCacheConfiguration().clustering().cacheMode().isClustered()) {
-         TestingUtil.waitForRehashToComplete(caches);
+         TestingUtil.waitForNoRebalance(caches);
       }
    }
 
@@ -351,9 +357,14 @@ public abstract class MultipleCacheManagersTest extends AbstractCacheTest {
     */
    protected <K, V> List<List<Cache<K, V>>> createClusteredCaches(int numMembersInCluster,
          ConfigurationBuilder defaultConfigBuilder, String... cacheNames) {
+      return createClusteredCaches(numMembersInCluster, defaultConfigBuilder, new TransportFlags(), cacheNames);
+   }
+
+   protected <K, V> List<List<Cache<K, V>>> createClusteredCaches(int numMembersInCluster,
+         ConfigurationBuilder defaultConfigBuilder, TransportFlags transportFlags, String... cacheNames) {
       List<List<Cache<K, V>>> allCaches = new ArrayList<>(numMembersInCluster);
       for (int i = 0; i < numMembersInCluster; i++) {
-         EmbeddedCacheManager cm = addClusterEnabledCacheManager(defaultConfigBuilder);
+         EmbeddedCacheManager cm = addClusterEnabledCacheManager(defaultConfigBuilder, transportFlags);
          List<Cache<K, V>> currentCacheManagerCaches = new ArrayList<>(cacheNames.length);
 
          for (String cacheName : cacheNames) {
@@ -671,7 +682,7 @@ public abstract class MultipleCacheManagersTest extends AbstractCacheTest {
       cacheManagers.remove(cacheIndex);
       if (awaitRehash && caches.size() > 0) {
          TestingUtil.blockUntilViewsReceived(60000, false, caches);
-         TestingUtil.waitForRehashToComplete(caches);
+         TestingUtil.waitForNoRebalance(caches);
       }
    }
 
@@ -699,7 +710,11 @@ public abstract class MultipleCacheManagersTest extends AbstractCacheTest {
    }
 
    protected MagicKey getKeyForCache(Cache<?, ?> primary, Cache<?, ?>... backup) {
-      return new MagicKey(primary, backup);
+      if (cacheMode == null || !cacheMode.isScattered()) {
+         return new MagicKey(primary, backup);
+      } else {
+         return new MagicKey(primary);
+      }
    }
 
    protected void assertNotLocked(final String cacheName, final Object key) {
@@ -748,7 +763,8 @@ public abstract class MultipleCacheManagersTest extends AbstractCacheTest {
       }  else if (!c.clustering().cacheMode().isClustered()) {
          throw new IllegalStateException("This is not a clustered cache!");
       } else {
-         final Address address = getCache(0, cacheName).getAdvancedCache().getDistributionManager().locate(key).get(0);
+         Address address = getCache(0, cacheName).getAdvancedCache().getDistributionManager().getCacheTopology()
+                                                 .getDistribution(key).primary();
          for (Cache<K, V> cache : this.<K, V>caches(cacheName)) {
             if (cache.getAdvancedCache().getRpcManager().getTransport().getAddress().equals(address)) {
                return cache;

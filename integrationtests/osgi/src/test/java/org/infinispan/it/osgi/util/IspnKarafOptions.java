@@ -29,8 +29,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.ops4j.pax.exam.Option;
+import org.ops4j.pax.exam.karaf.options.KarafDistributionConfigurationConsoleOption;
 import org.ops4j.pax.exam.karaf.options.LogLevelOption.LogLevel;
 import org.ops4j.pax.exam.options.AbstractUrlProvisionOption;
+import org.ops4j.pax.exam.options.MavenUrlReference;
 import org.ops4j.pax.exam.options.UrlProvisionOption;
 import org.ops4j.pax.exam.options.WrappedUrlProvisionOption;
 
@@ -39,6 +41,7 @@ public class IspnKarafOptions {
    private static final String PROP_VERSION_PAX_EXAM = "version.pax.exam";
    private static final String PROP_VERSION_MOCKITO = "version.mockito";
    private static final String PROP_VERSION_OBJENESIS = "version.mockito_dep.objenesis";
+   private static final String PROP_VERSION_BYTEBUDDY = "version.mockito_dep.bytebuddy";
    private static final String PROP_VERBOSE_KARAF = "verbose.karaf";
    private static final String PROP_UBER_JAR = "uberjar";
 
@@ -65,6 +68,10 @@ public class IspnKarafOptions {
          result = logLevel(LogLevel.TRACE);
       }
       return result;
+   }
+
+   public static Option runWithoutConsole() {
+      return new KarafDistributionConfigurationConsoleOption(false, false);
    }
 
    public static Option karafContainer() throws Exception {
@@ -144,9 +151,12 @@ public class IspnKarafOptions {
    public static Option bundleMockito() throws Exception {
       String versionMockito = MavenUtils.getProperties().getProperty(PROP_VERSION_MOCKITO);
       String versionObjenesis = MavenUtils.getProperties().getProperty(PROP_VERSION_OBJENESIS);
+      String versionByteBuddy = MavenUtils.getProperties().getProperty(PROP_VERSION_BYTEBUDDY);
       return composite(
             mavenBundle().groupId("org.objenesis").artifactId("objenesis").version(versionObjenesis),
-            mavenBundle().groupId("org.mockito").artifactId("mockito-core").version(versionMockito));
+            mavenBundle().groupId("org.mockito").artifactId("mockito-core").version(versionMockito),
+            mavenBundle().groupId("net.bytebuddy").artifactId("byte-buddy").version(versionByteBuddy),
+      mavenBundle().groupId("net.bytebuddy").artifactId("byte-buddy-agent").version(versionByteBuddy));
    }
 
    public static Option featureKarafJNDI() throws Exception {
@@ -315,6 +325,7 @@ public class IspnKarafOptions {
       return composite(karafContainer(),
                        vmOptions("-Djava.net.preferIPv4Stack=true", "-Djgroups.bind_addr=127.0.0.1"),
                        verboseKaraf(),
+                       runWithoutConsole(),
                        junitBundles(),
                        keepRuntimeFolder(),
             /* Required for the @Category(Per{Suite,Class,Method}) annotations. */

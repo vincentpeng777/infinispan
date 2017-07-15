@@ -1,5 +1,7 @@
 package org.infinispan.query.backend;
 
+import static org.infinispan.commons.dataconversion.EncodingUtils.fromStorage;
+
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.HashMap;
@@ -15,18 +17,24 @@ import org.hibernate.search.backend.TransactionContext;
 import org.hibernate.search.backend.spi.Work;
 import org.hibernate.search.backend.spi.WorkType;
 import org.hibernate.search.backend.spi.Worker;
+import org.hibernate.search.spi.IndexedTypeIdentifier;
 import org.hibernate.search.spi.SearchIntegrator;
+import org.hibernate.search.spi.impl.PojoIndexedTypeIdentifier;
 import org.infinispan.Cache;
 import org.infinispan.commands.FlagAffectedCommand;
 import org.infinispan.commands.tx.PrepareCommand;
+import org.infinispan.commands.write.AbstractDataWriteCommand;
 import org.infinispan.commands.write.ClearCommand;
+import org.infinispan.commands.write.ComputeCommand;
+import org.infinispan.commands.write.ComputeIfAbsentCommand;
 import org.infinispan.commands.write.PutKeyValueCommand;
 import org.infinispan.commands.write.PutMapCommand;
 import org.infinispan.commands.write.RemoveCommand;
 import org.infinispan.commands.write.ReplaceCommand;
 import org.infinispan.commands.write.WriteCommand;
+import org.infinispan.commons.dataconversion.Encoder;
+import org.infinispan.commons.dataconversion.Wrapper;
 import org.infinispan.commons.util.EnumUtil;
-import org.infinispan.compat.TypeConverter;
 import org.infinispan.container.DataContainer;
 import org.infinispan.container.entries.InternalCacheEntry;
 import org.infinispan.context.InvocationContext;
@@ -39,7 +47,6 @@ import org.infinispan.factories.annotations.Inject;
 import org.infinispan.factories.annotations.Start;
 import org.infinispan.factories.annotations.Stop;
 import org.infinispan.interceptors.DDAsyncInterceptor;
-import org.infinispan.manager.EmbeddedCacheManager;
 import org.infinispan.query.Transformer;
 import org.infinispan.query.impl.DefaultSearchWorkCreator;
 import org.infinispan.query.logging.Log;
@@ -69,17 +76,19 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
 
    private QueryKnownClasses queryKnownClasses;
 
-   private SearchWorkCreator<Object> searchWorkCreator = new DefaultSearchWorkCreator<>();
+   private SearchWorkCreator searchWorkCreator = new DefaultSearchWorkCreator();
 
    private SearchFactoryHandler searchFactoryHandler;
 
    private DataContainer dataContainer;
+   private final Encoder valueEncoder;
+   private final Wrapper valueWrapper;
    protected TransactionManager transactionManager;
    protected TransactionSynchronizationRegistry transactionSynchronizationRegistry;
    private DistributionManager distributionManager;
    private RpcManager rpcManager;
    protected ExecutorService asyncExecutor;
-   protected TypeConverter typeConverter;
+   protected InternalCacheRegistry internalCacheRegistry;
 
    private static final Log log = LogFactory.getLog(QueryInterceptor.class, Log.class);
 
@@ -88,40 +97,41 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
     * were declared and we are running in the (deprecated) autodetect mode. Autodetect mode will be removed in 9.0.
     */
    private Class<?>[] indexedEntities;
+   private final Cache cache;
 
-   public QueryInterceptor(SearchIntegrator searchFactory, IndexModificationStrategy indexingMode) {
+   public QueryInterceptor(SearchIntegrator searchFactory, IndexModificationStrategy indexingMode, Cache cache) {
       this.searchFactory = searchFactory;
       this.indexingMode = indexingMode;
+      this.cache = cache;
+      this.valueEncoder = cache.getAdvancedCache().getValueEncoder();
+      this.valueWrapper = cache.getAdvancedCache().getValueWrapper();
    }
 
    @Inject
    @SuppressWarnings("unused")
    protected void injectDependencies(TransactionManager transactionManager,
                                      TransactionSynchronizationRegistry transactionSynchronizationRegistry,
-                                     Cache cache,
-                                     EmbeddedCacheManager cacheManager,
                                      InternalCacheRegistry internalCacheRegistry,
                                      DistributionManager distributionManager,
                                      RpcManager rpcManager,
                                      DataContainer dataContainer,
-                                     @ComponentName(KnownComponentNames.ASYNC_TRANSPORT_EXECUTOR) ExecutorService e,
-                                     TypeConverter typeConverter) {
+                                     @ComponentName(KnownComponentNames.ASYNC_TRANSPORT_EXECUTOR) ExecutorService e) {
       this.transactionManager = transactionManager;
       this.transactionSynchronizationRegistry = transactionSynchronizationRegistry;
       this.distributionManager = distributionManager;
       this.rpcManager = rpcManager;
       this.asyncExecutor = e;
       this.dataContainer = dataContainer;
-      Set<Class<?>> indexedEntities = cache.getCacheConfiguration().indexing().indexedEntities();
-      this.indexedEntities = indexedEntities.isEmpty() ? null : indexedEntities.toArray(new Class<?>[indexedEntities.size()]);
-      this.queryKnownClasses = indexedEntities.isEmpty() ? new QueryKnownClasses(cache.getName(), cacheManager, internalCacheRegistry) : new QueryKnownClasses(indexedEntities);
-      this.searchFactoryHandler = new SearchFactoryHandler(this.searchFactory, this.queryKnownClasses, new TransactionHelper(transactionManager));
-      this.typeConverter = typeConverter;
+      this.internalCacheRegistry = internalCacheRegistry;
    }
 
    @Start
    protected void start() {
-      if (indexedEntities == null) {
+      Set<Class<?>> indexedEntities = cache.getCacheConfiguration().indexing().indexedEntities();
+      this.indexedEntities = indexedEntities.isEmpty() ? null : indexedEntities.toArray(new Class<?>[indexedEntities.size()]);
+      queryKnownClasses = indexedEntities.isEmpty() ? new QueryKnownClasses(cache.getName(), cache.getCacheManager(), internalCacheRegistry) : new QueryKnownClasses(indexedEntities);
+      searchFactoryHandler = new SearchFactoryHandler(searchFactory, queryKnownClasses, new TransactionHelper(transactionManager));
+      if (this.indexedEntities == null) {
          queryKnownClasses.start(searchFactoryHandler);
          Set<Class<?>> classes = queryKnownClasses.keys();
          Class<?>[] classesArray = classes.toArray(new Class<?>[classes.size()]);
@@ -169,6 +179,20 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
    }
 
    @Override
+   public Object visitComputeCommand(InvocationContext ctx, ComputeCommand command) throws Throwable {
+      InternalCacheEntry internalCacheEntry = dataContainer.get(command.getKey());
+      Object stateBeforeCompute = internalCacheEntry != null ? internalCacheEntry.getValue() : null;
+      return invokeNextThenAccept(ctx, command, (rCtx, rCommand, rv) -> processComputeCommand(((ComputeCommand) rCommand), rCtx, stateBeforeCompute, rv,null));
+   }
+
+   @Override
+   public Object visitComputeIfAbsentCommand(InvocationContext ctx, ComputeIfAbsentCommand command) throws Throwable {
+      InternalCacheEntry internalCacheEntry = dataContainer.get(command.getKey());
+      Object stateBeforeCompute = internalCacheEntry != null ? internalCacheEntry.getValue() : null;
+      return invokeNextThenAccept(ctx, command, (rCtx, rCommand, rv) -> processComputeIfAbsentCommand(((ComputeIfAbsentCommand) rCommand), rCtx, stateBeforeCompute, rv, null));
+   }
+
+   @Override
    public Object visitPutMapCommand(InvocationContext ctx, PutMapCommand command) throws Throwable {
       command.setFlagsBitSet(EnumUtil.diffBitSets(command.getFlagsBitSet(), FlagBitSets.IGNORE_RETURN_VALUES));
       return invokeNextThenAccept(ctx, command, (rCtx, rCommand, rv) -> {
@@ -200,7 +224,8 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
       Boolean isIndexable = queryKnownClasses.get(entityType);
       if (isIndexable != null && isIndexable.booleanValue()) {
          if (searchFactoryHandler.hasIndex(entityType)) {
-            performSearchWorks(searchWorkCreator.createPerEntityTypeWorks((Class<Object>) entityType, WorkType.PURGE_ALL), transactionContext);
+            IndexedTypeIdentifier type = new PojoIndexedTypeIdentifier(entityType);
+            performSearchWorks(searchWorkCreator.createPerEntityTypeWorks(type, WorkType.PURGE_ALL), transactionContext);
          }
       }
    }
@@ -210,7 +235,8 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
       for (Class c : queryKnownClasses.keys()) {
          if (searchFactoryHandler.hasIndex(c)) {
             //noinspection unchecked
-            performSearchWorks(searchWorkCreator.createPerEntityTypeWorks(c, WorkType.PURGE_ALL), transactionContext);
+            IndexedTypeIdentifier type = new PojoIndexedTypeIdentifier(c);
+            performSearchWorks(searchWorkCreator.createPerEntityTypeWorks(type, WorkType.PURGE_ALL), transactionContext);
          }
       }
    }
@@ -222,14 +248,14 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
 
 
    protected void updateIndexes(final boolean usingSkipIndexCleanupFlag, final Object value, final Object key,
-         final TransactionContext transactionContext) {
+                                final TransactionContext transactionContext) {
       // Note: it's generally unsafe to assume there is no previous entry to cleanup: always use UPDATE
       // unless the specific flag is allowing this.
       performSearchWork(value, keyToString(key), usingSkipIndexCleanupFlag ? WorkType.ADD : WorkType.UPDATE, transactionContext);
    }
 
    private void performSearchWork(Object value, Serializable id, WorkType workType,
-         TransactionContext transactionContext) {
+                                  TransactionContext transactionContext) {
       if (value == null) throw new NullPointerException("Cannot handle a null value!");
       Collection<Work> works = searchWorkCreator.createPerEntityWorks(value, id, workType);
       performSearchWorks(works, transactionContext);
@@ -242,15 +268,17 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
       }
    }
 
-   public boolean hasIndex(final Class<?> c) {
-      return searchFactoryHandler.hasIndex(c);
+   /**
+    * The set of known classes. Some might be indexable, some are not.
+    *
+    * @return an immutable set
+    */
+   public Set<Class<?>> getKnownClasses() {
+      return queryKnownClasses.keys();
    }
 
-   private Object extractValue(Object wrappedValue) {
-      if (typeConverter != null) {
-         return typeConverter.unboxValue(wrappedValue);
-      }
-         return wrappedValue;
+   private Object extractValue(Object storedValue) {
+      return fromStorage(storedValue, valueEncoder, valueWrapper);
    }
 
    public void enableClasses(Class[] classes) {
@@ -279,13 +307,14 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
 
    /**
     * Customize work creation during indexing
+    *
     * @param searchWorkCreator custom {@link org.infinispan.query.backend.SearchWorkCreator}
     */
-   public void setSearchWorkCreator(SearchWorkCreator<Object> searchWorkCreator) {
+   public void setSearchWorkCreator(SearchWorkCreator searchWorkCreator) {
       this.searchWorkCreator = searchWorkCreator;
    }
 
-   public SearchWorkCreator<Object> getSearchWorkCreator() {
+   public SearchWorkCreator getSearchWorkCreator() {
       return searchWorkCreator;
    }
 
@@ -314,6 +343,12 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
          } else if (writeCommand instanceof ReplaceCommand) {
             InternalCacheEntry internalCacheEntry = dataContainer.get(((ReplaceCommand) writeCommand).getKey());
             stateBeforePrepare[i] = internalCacheEntry != null ? internalCacheEntry.getValue() : null;
+         } else if (writeCommand instanceof ComputeCommand) {
+            InternalCacheEntry internalCacheEntry = dataContainer.get(((ComputeCommand) writeCommand).getKey());
+            stateBeforePrepare[i] = internalCacheEntry != null ? internalCacheEntry.getValue() : null;
+         } else if (writeCommand instanceof ComputeIfAbsentCommand) {
+            InternalCacheEntry internalCacheEntry = dataContainer.get(((ComputeIfAbsentCommand) writeCommand).getKey());
+            stateBeforePrepare[i] = internalCacheEntry != null ? internalCacheEntry.getValue() : null;
          }
       }
 
@@ -335,6 +370,10 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
                } else if (writeCommand instanceof ReplaceCommand) {
                   processReplaceCommand((ReplaceCommand) writeCommand, txInvocationContext, stateBeforePrepare[i],
                         transactionContext);
+               } else if (writeCommand instanceof ComputeCommand) {
+                  processComputeCommand((ComputeCommand) writeCommand, txInvocationContext, stateBeforePrepare[i], transactionContext);
+               } else if (writeCommand instanceof ComputeIfAbsentCommand) {
+                     processComputeIfAbsentCommand((ComputeIfAbsentCommand) writeCommand, txInvocationContext, stateBeforePrepare[i], transactionContext);
                } else if (writeCommand instanceof ClearCommand) {
                   processClearCommand((ClearCommand) writeCommand, txInvocationContext, transactionContext);
                }
@@ -356,9 +395,9 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
    /**
     * Indexing management of a ReplaceCommand
     *
-    * @param command the ReplaceCommand
-    * @param ctx the InvocationContext
-    * @param valueReplaced the previous value on this key
+    * @param command            the ReplaceCommand
+    * @param ctx                the InvocationContext
+    * @param valueReplaced      the previous value on this key
     * @param transactionContext Optional for lazy initialization, or reuse an existing context.
     */
    private void processReplaceCommand(final ReplaceCommand command, final InvocationContext ctx, final Object valueReplaced, TransactionContext transactionContext) {
@@ -386,18 +425,95 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
    }
 
    /**
+    * Indexing management of a ComputeCommand
+    *
+    * @param command the ComputeCommand
+    * @param ctx the InvocationContext
+    * @param prevValue the previous value on this key
+    * @param transactionContext Optional for lazy initialization, or reuse an existing context.
+    */
+   private void processComputeCommand(final ComputeCommand command, final InvocationContext ctx, final Object prevValue, TransactionContext transactionContext) {
+      if (command.isSuccessful()) {
+         processComputes(command, ctx, prevValue, ctx.lookupEntry(command.getKey()).getValue(), transactionContext);
+      }
+   }
+
+   /**
+    * Indexing management of a ComputeCommand
+    *
+    * @param command the ComputeCommand
+    * @param ctx the InvocationContext
+    * @param prevValue the previous value on this key
+    * @param computedValue the computedValue
+    * @param transactionContext Optional for lazy initialization, or reuse an existing context.
+    */
+   private void processComputeCommand(final ComputeCommand command, final InvocationContext ctx, final Object prevValue, final Object computedValue, TransactionContext transactionContext) {
+      if (command.isSuccessful()) {
+         processComputes(command, ctx, prevValue, computedValue, transactionContext);
+      }
+   }
+
+   /**
+    * Indexing management of a ComputeIfAbsentCommand
+    *
+    * @param command the ComputeIfAbsentCommand
+    * @param ctx the InvocationContext
+    * @param prevValue the value before the call
+    * @param transactionContext Optional for lazy initialization, or reuse an existing context.
+    */
+   private void processComputeIfAbsentCommand(final ComputeIfAbsentCommand command, final InvocationContext ctx, final Object prevValue, TransactionContext transactionContext) {
+      if (command.isSuccessful()) {
+         processComputes(command, ctx, prevValue, ctx.lookupEntry(command.getKey()).getValue(), transactionContext);
+      }
+   }
+
+   /**
+    * Indexing management of a ComputeIfAbsentCommand
+    *
+    * @param command the ComputeIfAbsentCommand
+    * @param ctx the InvocationContext
+    * @param prevValue the value before the call
+    * @param computedValue the computedValue
+    * @param transactionContext Optional for lazy initialization, or reuse an existing context.
+    */
+   private void processComputeIfAbsentCommand(final ComputeIfAbsentCommand command, final InvocationContext ctx, final Object prevValue, final Object computedValue, TransactionContext transactionContext) {
+      if (command.isSuccessful()) {
+         processComputes(command, ctx, prevValue, computedValue, transactionContext);
+      }
+   }
+   private void processComputes(AbstractDataWriteCommand command, InvocationContext ctx, Object prevValue, Object computedValue, TransactionContext transactionContext) {
+      Object key = extractValue(command.getKey());
+      if (shouldModifyIndexes(command, ctx, key)) {
+         final boolean usingSkipIndexCleanupFlag = usingSkipIndexCleanup(command);
+         Object p2 = extractValue(computedValue);
+         final boolean newValueIsIndexed = updateKnownTypesIfNeeded(p2);
+
+         if (!usingSkipIndexCleanupFlag && updateKnownTypesIfNeeded(prevValue) && shouldRemove(p2, prevValue)) {
+            if (shouldModifyIndexes(command, ctx, key)) {
+               transactionContext = transactionContext == null ? makeTransactionalEventContext() : transactionContext;
+               removeFromIndexes(prevValue, extractValue(key), transactionContext);
+            }
+         }
+         if (newValueIsIndexed) {
+            transactionContext = transactionContext == null ? makeTransactionalEventContext() : transactionContext;
+            updateIndexes(usingSkipIndexCleanupFlag, p2, key, transactionContext);
+         }
+      }
+   }
+
+   /**
     * Indexing management of a RemoveCommand
     *
-    * @param command the visited RemoveCommand
-    * @param ctx the InvocationContext of the RemoveCommand
-    * @param valueRemoved the value before the removal
+    * @param command            the visited RemoveCommand
+    * @param ctx                the InvocationContext of the RemoveCommand
+    * @param valueRemoved       the value before the removal
     * @param transactionContext Optional for lazy initialization, or reuse an existing context.
     */
    private void processRemoveCommand(final RemoveCommand command, final InvocationContext ctx, final Object valueRemoved, TransactionContext transactionContext) {
       if (command.isSuccessful() && !command.isNonExistent()) {
          Object key = extractValue(command.getKey());
          if (shouldModifyIndexes(command, ctx, key)) {
-            final Object value = extractValue(valueRemoved);
+            final Object value = extractValue(command.isConditional() ? command.getValue() : valueRemoved);
             if (updateKnownTypesIfNeeded(value)) {
                transactionContext = transactionContext == null ? makeTransactionalEventContext() : transactionContext;
                removeFromIndexes(value, key, transactionContext);
@@ -409,9 +525,9 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
    /**
     * Indexing management of a PutMapCommand
     *
-    * @param command the visited PutMapCommand
-    * @param ctx the InvocationContext of the PutMapCommand
-    * @param previousValues a map with the previous values, before processing the given PutMapCommand
+    * @param command            the visited PutMapCommand
+    * @param ctx                the InvocationContext of the PutMapCommand
+    * @param previousValues     a map with the previous values, before processing the given PutMapCommand
     * @param transactionContext Optional for lazy initialization, or reuse an existing context.
     */
    private void processPutMapCommand(final PutMapCommand command, final InvocationContext ctx, final Map<Object, Object> previousValues, TransactionContext transactionContext) {
@@ -441,9 +557,9 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
    /**
     * Indexing management of a PutKeyValueCommand
     *
-    * @param command the visited PutKeyValueCommand
-    * @param ctx the InvocationContext of the PutKeyValueCommand
-    * @param previousValue the value being replaced by the put operation
+    * @param command            the visited PutKeyValueCommand
+    * @param ctx                the InvocationContext of the PutKeyValueCommand
+    * @param previousValue      the value being replaced by the put operation
     * @param transactionContext Optional for lazy initialization, or reuse an existing context.
     */
    private void processPutKeyValueCommand(final PutKeyValueCommand command, final InvocationContext ctx, final Object previousValue, TransactionContext transactionContext) {
@@ -478,8 +594,8 @@ public final class QueryInterceptor extends DDAsyncInterceptor {
    /**
     * Indexing management of the Clear command
     *
-    * @param command the ClearCommand
-    * @param ctx the InvocationContext of the PutKeyValueCommand
+    * @param command            the ClearCommand
+    * @param ctx                the InvocationContext of the PutKeyValueCommand
     * @param transactionContext Optional for lazy initialization, or to reuse an existing transactional context.
     */
    private void processClearCommand(final ClearCommand command, final InvocationContext ctx, TransactionContext transactionContext) {

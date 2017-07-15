@@ -8,11 +8,19 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiFunction;
 
+import org.infinispan.commands.AbstractVisitor;
+import org.infinispan.commands.FlagAffectedCommand;
 import org.infinispan.commands.TopologyAffectedCommand;
 import org.infinispan.commands.VisitableCommand;
+import org.infinispan.commands.functional.ReadOnlyKeyCommand;
+import org.infinispan.commands.functional.ReadOnlyManyCommand;
+import org.infinispan.commands.read.GetAllCommand;
+import org.infinispan.commands.read.GetCacheEntryCommand;
+import org.infinispan.commands.read.GetKeyValueCommand;
 import org.infinispan.commands.remote.GetKeysInGroupCommand;
 import org.infinispan.configuration.cache.Configuration;
 import org.infinispan.context.InvocationContext;
+import org.infinispan.context.impl.FlagBitSets;
 import org.infinispan.distribution.DistributionManager;
 import org.infinispan.factories.KnownComponentNames;
 import org.infinispan.factories.annotations.ComponentName;
@@ -21,6 +29,7 @@ import org.infinispan.interceptors.DDAsyncInterceptor;
 import org.infinispan.interceptors.InvocationFinallyFunction;
 import org.infinispan.remoting.RemoteException;
 import org.infinispan.remoting.transport.jgroups.SuspectException;
+import org.infinispan.statetransfer.AllOwnersLostException;
 import org.infinispan.statetransfer.OutdatedTopologyException;
 import org.infinispan.statetransfer.StateTransferLock;
 import org.infinispan.statetransfer.StateTransferManager;
@@ -41,10 +50,11 @@ import org.infinispan.util.logging.LogFactory;
  */
 public abstract class BaseStateTransferInterceptor extends DDAsyncInterceptor {
    private final boolean trace = getLog().isTraceEnabled();
+   private final InvocationFinallyFunction handleReadCommandReturn = this::handleReadCommandReturn;
 
-   protected StateTransferManager stateTransferManager;
+   private StateTransferManager stateTransferManager;
    protected StateTransferLock stateTransferLock;
-   protected Executor remoteExecutor;
+   private Executor remoteExecutor;
    private DistributionManager distributionManager;
    private ScheduledExecutorService timeoutExecutor;
 
@@ -75,9 +85,8 @@ public abstract class BaseStateTransferInterceptor extends DDAsyncInterceptor {
          return invokeNextThenAccept(ctx, command, (rCtx, rCommand, rv) -> {
             GetKeysInGroupCommand cmd = (GetKeysInGroupCommand) rCommand;
             final int commandTopologyId = cmd.getTopologyId();
-            String groupName = cmd.getGroupName();
             if (currentTopologyId() != commandTopologyId &&
-                  distributionManager.getCacheTopology().isWriteOwner(groupName)) {
+                  distributionManager.getCacheTopology().isWriteOwner(cmd.getGroupName())) {
                throw new OutdatedTopologyException(
                      "Cache topology changed while the command was executing: expected " +
                            commandTopologyId + ", got " + currentTopologyId());
@@ -128,12 +137,13 @@ public abstract class BaseStateTransferInterceptor extends DDAsyncInterceptor {
       return cacheTopology == null ? -1 : cacheTopology.getTopologyId();
    }
 
-   protected final void updateTopologyId(TopologyAffectedCommand command) throws InterruptedException {
+   protected final void updateTopologyId(TopologyAffectedCommand command) {
       // set the topology id if it was not set before (ie. this is local command)
       // TODO Make tx commands extend FlagAffectedCommand so we can use CACHE_MODE_LOCAL in TransactionTable.cleanupStaleTransactions
       if (command.getTopologyId() == -1) {
          CacheTopology cacheTopology = stateTransferManager.getCacheTopology();
          if (cacheTopology != null) {
+            if (trace) getLog().tracef("Setting command topology to %d", cacheTopology.getTopologyId());
             command.setTopologyId(cacheTopology.getTopologyId());
          }
       }
@@ -141,7 +151,7 @@ public abstract class BaseStateTransferInterceptor extends DDAsyncInterceptor {
 
    protected <T extends VisitableCommand> Object retryWhenDone(CompletableFuture<Void> future, int topologyId,
                                                                InvocationContext ctx, T command,
-                                                               InvocationFinallyFunction callback) throws Throwable {
+                                                               InvocationFinallyFunction callback) {
       if (future.isDone()) {
          getLog().tracef("Retrying command %s for topology %d", command, topologyId);
          return invokeNextAndHandle(ctx, command, callback);
@@ -157,6 +167,139 @@ public abstract class BaseStateTransferInterceptor extends DDAsyncInterceptor {
          cancellableRetry.setTimeoutFuture(timeoutFuture);
          return makeStage(asyncInvokeNext(ctx, command, retryFuture)).andHandle(ctx, command, callback);
       }
+   }
+
+   @Override
+   public Object visitGetKeyValueCommand(InvocationContext ctx, GetKeyValueCommand command) throws Throwable {
+      return handleReadCommand(ctx, command);
+   }
+
+   @Override
+   public Object visitGetCacheEntryCommand(InvocationContext ctx, GetCacheEntryCommand command)
+         throws Throwable {
+      return handleReadCommand(ctx, command);
+   }
+
+   @Override
+   public Object visitGetAllCommand(InvocationContext ctx, GetAllCommand command) throws Throwable {
+      return handleReadCommand(ctx, command);
+   }
+
+   protected <C extends VisitableCommand & TopologyAffectedCommand & FlagAffectedCommand> Object handleReadCommand(
+         InvocationContext ctx, C command) {
+      return isLocalOnly(command) ? invokeNext(ctx, command) :
+            updateAndInvokeNextRead(ctx, command);
+   }
+
+   private <C extends VisitableCommand & TopologyAffectedCommand> Object updateAndInvokeNextRead(InvocationContext ctx, C command) {
+      updateTopologyId(command);
+      return invokeNextAndHandle(ctx, command,handleReadCommandReturn);
+   }
+
+   private Object handleReadCommandReturn(InvocationContext rCtx, VisitableCommand rCommand, Object rv, Throwable t)
+         throws Throwable {
+      if (t == null)
+         return rv;
+
+      Throwable ce = t;
+      while (ce instanceof RemoteException) {
+         ce = ce.getCause();
+      }
+      TopologyAffectedCommand cmd = (TopologyAffectedCommand) rCommand;
+      final CacheTopology cacheTopology = stateTransferManager.getCacheTopology();
+      int currentTopologyId = cacheTopology == null ? -1 : cacheTopology.getTopologyId();
+      int requestedTopologyId = currentTopologyId;
+      if (ce instanceof SuspectException) {
+         if (trace)
+            getLog().tracef("Retrying command because of suspected node, current topology is %d: %s",
+                  currentTopologyId, rCommand);
+         // It is possible that current topology is actual but the view still contains a node that's about to leave;
+         // a broadcast to all nodes then can end with suspect exception, but we won't get any new topology.
+         // An example of this situation is when a node sends leave - topology can be installed before the new view.
+         // To prevent suspect exceptions use SYNCHRONOUS_IGNORE_LEAVERS response mode.
+         if (currentTopologyId == cmd.getTopologyId() && !cacheTopology.getActualMembers().contains(((SuspectException) ce).getSuspect())) {
+            throw new IllegalStateException("Command was not sent with SYNCHRONOUS_IGNORE_LEAVERS?");
+         }
+      } else if (ce instanceof OutdatedTopologyException) {
+         if (trace)
+            getLog().tracef("Retrying command because of topology change, current topology is %d, command topology %d: %s",
+                  currentTopologyId, cmd.getTopologyId(), cmd);
+         // In scattered cache, when we have contacted the primary owner in current topology and this does respond
+         // with UnsureResponse we don't know about any other read owners; we need to wait for the next topology
+         if (cacheConfiguration.clustering().cacheMode().isScattered()) {
+            OutdatedTopologyException ote = (OutdatedTopologyException) ce;
+            if (ote.requestedTopologyId >= 0) {
+               requestedTopologyId = Math.max(currentTopologyId, ote.requestedTopologyId);
+            } else {
+               requestedTopologyId = nextTopology(cmd, currentTopologyId);
+            }
+         }
+      } else if (ce instanceof AllOwnersLostException) {
+         if (trace)
+            getLog().tracef("All owners for command %s have been lost.", cmd);
+         // In scattered cache it might be common to lose the single owner, we need to retry. We fill find out that
+         // we can return null only after the next topology is installed. If partition handling is enabled we decide
+         // only based on the availability status.
+         // In other cache modes, during partition the exception is already handled in PartitionHandlingInterceptor,
+         // and if the handling is not enabled, we can't but return null.
+         if (cacheConfiguration.clustering().cacheMode().isScattered()) {
+            requestedTopologyId = nextTopology(cmd, currentTopologyId);
+         } else {
+            return rCommand.acceptVisitor(rCtx, LostDataVisitor.INSTANCE);
+         }
+      } else {
+         throw t;
+      }
+      // We can get OTE even if current topology information is sufficient:
+      // 1. A has topology in phase READ_ALL_WRITE_ALL, sends message to both old owner B and new C
+      // 2. C has old topology with READ_OLD_WRITE_ALL, so it responds with UnsureResponse
+      // 3. C updates topology to READ_ALL_WRITE_ALL, B updates to READ_NEW_WRITE_ALL
+      // 4. B receives the read, but it already can't read: responds with UnsureResponse
+      // 5. A receives two unsure responses and throws OTE
+      // However, now we are sure that we can immediately retry the request, because C must have updated its topology
+      cmd.setTopologyId(requestedTopologyId);
+      ((FlagAffectedCommand) cmd).addFlags(FlagBitSets.COMMAND_RETRY);
+      if (requestedTopologyId == currentTopologyId) {
+         return invokeNextAndHandle(rCtx, rCommand, handleReadCommandReturn);
+      } else {
+         return makeStage(asyncInvokeNext(rCtx, rCommand, stateTransferLock.transactionDataFuture(requestedTopologyId)))
+               .andHandle(rCtx, rCommand, handleReadCommandReturn);
+      }
+   }
+
+   private int nextTopology(TopologyAffectedCommand cmd, int currentTopologyId) {
+      if (cmd.getTopologyId() == currentTopologyId) {
+         return currentTopologyId + 1;
+      } else if (cmd.getTopologyId() > currentTopologyId) {
+         return cmd.getTopologyId();
+      } else {
+         return currentTopologyId;
+      }
+   }
+
+   protected int getNewTopologyId(Throwable ce, int currentTopologyId, TopologyAffectedCommand command) {
+      int requestedTopologyId = command.getTopologyId() + 1;
+      if (ce instanceof OutdatedTopologyException) {
+         OutdatedTopologyException ote = (OutdatedTopologyException) ce;
+         if (ote.requestedTopologyId >= 0) {
+            requestedTopologyId = ote.requestedTopologyId;
+         }
+      }
+      return Math.max(currentTopologyId, requestedTopologyId);
+   }
+
+   protected boolean isLocalOnly(FlagAffectedCommand command) {
+      return command.hasAnyFlag(FlagBitSets.CACHE_MODE_LOCAL);
+   }
+
+   @Override
+   public Object visitReadOnlyKeyCommand(InvocationContext ctx, ReadOnlyKeyCommand command) throws Throwable {
+      return handleReadCommand(ctx, command);
+   }
+
+   @Override
+   public Object visitReadOnlyManyCommand(InvocationContext ctx, ReadOnlyManyCommand command) throws Throwable {
+      return handleReadCommand(ctx, command);
    }
 
    protected abstract Log getLog();
@@ -180,7 +323,7 @@ public abstract class BaseStateTransferInterceptor extends DDAsyncInterceptor {
       @SuppressWarnings("unused")
       private volatile Object timeoutFuture;
 
-      public CancellableRetry(T command, int topologyId) {
+      CancellableRetry(T command, int topologyId) {
          this.command = command;
          this.topologyId = topologyId;
       }
@@ -224,6 +367,26 @@ public abstract class BaseStateTransferInterceptor extends DDAsyncInterceptor {
          if (!timeoutFutureUpdater.compareAndSet(this, null, timeoutFuture)) {
             timeoutFuture.cancel(false);
          }
+      }
+   }
+
+   // We don't need to implement GetAllCommand or ReadManyCommand here because these don't throw AllOwnersLostException
+   protected static class LostDataVisitor extends AbstractVisitor {
+      public static final LostDataVisitor INSTANCE = new LostDataVisitor();
+
+      @Override
+      public Object visitGetKeyValueCommand(InvocationContext ctx, GetKeyValueCommand command) throws Throwable {
+         return null;
+      }
+
+      @Override
+      public Object visitGetCacheEntryCommand(InvocationContext ctx, GetCacheEntryCommand command) throws Throwable {
+         return null;
+      }
+
+      @Override
+      public Object visitReadOnlyKeyCommand(InvocationContext ctx, ReadOnlyKeyCommand command) throws Throwable {
+         return command.performOnLostData();
       }
    }
 }

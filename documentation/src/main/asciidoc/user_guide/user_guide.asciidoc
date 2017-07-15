@@ -4,6 +4,7 @@ The Infinispan community
 :icons: font
 :toclevels: 3
 :numbered:
+:stem: asciimath
 
 // Load all default values here for use in all sub-chapters
 include::{defaults}[]
@@ -18,8 +19,7 @@ include::clustering.adoc[]
 include::marshalling.adoc[]
 include::transactions.adoc[]
 include::locking.adoc[]
-include::streams.adoc[]
-include::distributed_executor.adoc[]
+include::execute_grid.adoc[]
 include::query.adoc[]
 include::cdi.adoc[]
 include::jcache.adoc[]
@@ -35,3 +35,4 @@ include::cross_site_replication.adoc[]
 include::rolling_upgrades.adoc[]
 include::extending.adoc[]
 include::architecture.adoc[]
+include::counters.adoc[]

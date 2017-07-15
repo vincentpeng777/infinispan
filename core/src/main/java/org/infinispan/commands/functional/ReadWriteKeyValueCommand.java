@@ -11,7 +11,7 @@ import java.util.function.BiFunction;
 import org.infinispan.commands.CommandInvocationId;
 import org.infinispan.commands.Visitor;
 import org.infinispan.commands.write.ValueMatcher;
-import org.infinispan.commons.api.functional.EntryView.ReadWriteEntryView;
+import org.infinispan.functional.EntryView.ReadWriteEntryView;
 import org.infinispan.commons.marshall.MarshallUtil;
 import org.infinispan.container.entries.CacheEntry;
 import org.infinispan.container.entries.MVCCEntry;
@@ -129,11 +129,6 @@ public final class ReadWriteKeyValueCommand<K, V, R> extends AbstractWriteKeyCom
       }
 
       return f.apply(value, EntryViews.readWrite(e, e.getValue(), e.getMetadata()));
-   }
-
-   @Override
-   public void updateStatusFromRemoteResponse(Object remoteResponse) {
-      // TODO: Customise this generated block
    }
 
    @Override

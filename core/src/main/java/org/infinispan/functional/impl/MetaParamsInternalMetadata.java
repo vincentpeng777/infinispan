@@ -7,17 +7,16 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-import org.infinispan.commons.api.functional.MetaParam;
-import org.infinispan.commons.api.functional.MetaParam.MetaCreated;
-import org.infinispan.commons.api.functional.MetaParam.MetaEntryVersion;
-import org.infinispan.commons.api.functional.MetaParam.MetaLastUsed;
-import org.infinispan.commons.api.functional.MetaParam.MetaLifespan;
-import org.infinispan.commons.api.functional.MetaParam.MetaMaxIdle;
+import org.infinispan.functional.MetaParam;
+import org.infinispan.functional.MetaParam.MetaCreated;
+import org.infinispan.functional.MetaParam.MetaEntryVersion;
+import org.infinispan.functional.MetaParam.MetaLastUsed;
+import org.infinispan.functional.MetaParam.MetaLifespan;
+import org.infinispan.functional.MetaParam.MetaMaxIdle;
 import org.infinispan.commons.marshall.AbstractExternalizer;
 import org.infinispan.commons.util.Experimental;
 import org.infinispan.commons.util.Util;
 import org.infinispan.container.versioning.EntryVersion;
-import org.infinispan.container.versioning.FunctionalEntryVersionAdapter;
 import org.infinispan.marshall.core.Ids;
 import org.infinispan.metadata.InternalMetadata;
 import org.infinispan.metadata.Metadata;
@@ -88,12 +87,7 @@ public final class MetaParamsInternalMetadata implements InternalMetadata, MetaP
 
    @Override
    public EntryVersion version() {
-      return params.find(MetaEntryVersion.class).map(MetaParamsInternalMetadata::versionOrNull).orElse(null);
-   }
-
-   private static EntryVersion versionOrNull(MetaEntryVersion mev) {
-      org.infinispan.commons.api.functional.EntryVersion entryVersion = mev.get();
-      return entryVersion instanceof FunctionalEntryVersionAdapter ? ((FunctionalEntryVersionAdapter) entryVersion).get() : null;
+      return params.find(MetaEntryVersion.class).map(MetaEntryVersion::get).orElse(null);
    }
 
    @Override
@@ -102,7 +96,7 @@ public final class MetaParamsInternalMetadata implements InternalMetadata, MetaP
    }
 
    @Override
-   public <T> Optional<T> findMetaParam(Class<T> type) {
+   public <T extends MetaParam> Optional<T> findMetaParam(Class<T> type) {
       return params.find(type);
    }
 
@@ -116,7 +110,7 @@ public final class MetaParamsInternalMetadata implements InternalMetadata, MetaP
    public static class Builder implements Metadata.Builder {
       private final MetaParams params;
 
-      public Builder(MetaParams params) {
+      Builder(MetaParams params) {
          this.params = params;
       }
 
@@ -146,7 +140,7 @@ public final class MetaParamsInternalMetadata implements InternalMetadata, MetaP
 
       @Override
       public Metadata.Builder version(EntryVersion version) {
-         params.add(new MetaEntryVersion<>(new FunctionalEntryVersionAdapter(version)));
+         params.add(new MetaEntryVersion(version));
          return this;
       }
 
@@ -177,12 +171,12 @@ public final class MetaParamsInternalMetadata implements InternalMetadata, MetaP
    public static final class Externalizer extends AbstractExternalizer<MetaParamsInternalMetadata> {
       @Override
       public void writeObject(ObjectOutput oo, MetaParamsInternalMetadata o) throws IOException {
-         oo.writeObject(o.params);
+         MetaParams.writeTo(oo, o.params);
       }
 
       @Override
       public MetaParamsInternalMetadata readObject(ObjectInput input) throws IOException, ClassNotFoundException {
-         MetaParams params = (MetaParams) input.readObject();
+         MetaParams params = MetaParams.readFrom(input);
          return new MetaParamsInternalMetadata(params);
       }
 

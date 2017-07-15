@@ -20,6 +20,7 @@ import org.infinispan.distribution.LocalizedCacheTopology;
 import org.infinispan.distribution.ch.ConsistentHash;
 import org.infinispan.distribution.ch.ConsistentHashFactory;
 import org.infinispan.distribution.ch.KeyPartitioner;
+import org.infinispan.distribution.ch.impl.ScatteredConsistentHashFactory;
 import org.infinispan.distribution.ch.impl.SyncConsistentHashFactory;
 import org.infinispan.distribution.ch.impl.SyncReplicatedConsistentHashFactory;
 import org.infinispan.distribution.ch.impl.TopologyAwareSyncConsistentHashFactory;
@@ -120,7 +121,8 @@ public class StateTransferManagerImpl implements StateTransferManager {
             configuration.clustering().hash().numOwners(),
             configuration.clustering().stateTransfer().timeout(),
             configuration.transaction().transactionProtocol().isTotalOrder(),
-            configuration.clustering().cacheMode().isDistributed(),
+            configuration.clustering().cacheMode(),
+            configuration.clustering().partitionHandling().enabled(),
             configuration.clustering().hash().capacityFactor(),
             localTopologyManager.getPersistentUUID(),
             persistentStateChecksum);
@@ -156,9 +158,12 @@ public class StateTransferManagerImpl implements StateTransferManager {
                } else {
                   factory = new SyncConsistentHashFactory();
                }
-            } else {
-               // this is also used for invalidation mode
+            } else if (cacheMode.isReplicated() || cacheMode.isInvalidation()) {
                factory = new SyncReplicatedConsistentHashFactory();
+            } else if (cacheMode.isScattered()) {
+               factory = new ScatteredConsistentHashFactory();
+            } else {
+               throw new CacheException("Unexpected cache mode: " + cacheMode);
             }
          }
       }
@@ -182,7 +187,7 @@ public class StateTransferManagerImpl implements StateTransferManager {
          unionCH = new PartitionerConsistentHash(unionCH, keyPartitioner);
       }
       return new CacheTopology(cacheTopology.getTopologyId(), cacheTopology.getRebalanceId(), currentCH, pendingCH,
-            unionCH, cacheTopology.getActualMembers(), cacheTopology.getMembersPersistentUUIDs());
+            unionCH, cacheTopology.getPhase(), cacheTopology.getActualMembers(), cacheTopology.getMembersPersistentUUIDs());
    }
 
    private void doTopologyUpdate(CacheTopology newCacheTopology, boolean isRebalance) {
@@ -213,7 +218,9 @@ public class StateTransferManagerImpl implements StateTransferManager {
       cacheNotifier.notifyTopologyChanged(oldCacheTopology, newCacheTopology, newCacheTopology.getTopologyId(), false);
 
       if (initialStateTransferComplete.getCount() > 0) {
-         boolean isJoined = stateConsumer.getCacheTopology().getReadConsistentHash().getMembers().contains(rpcManager.getAddress());
+         assert stateConsumer.getCacheTopology() == newCacheTopology;
+         boolean isJoined = newCacheTopology.getPhase() == CacheTopology.Phase.NO_REBALANCE
+               && newCacheTopology.getReadConsistentHash().getMembers().contains(rpcManager.getAddress());
          if (isJoined) {
             initialStateTransferComplete.countDown();
             log.tracef("Initial state transfer complete for cache %s on node %s", cacheName, rpcManager.getAddress());
@@ -317,8 +324,8 @@ public class StateTransferManagerImpl implements StateTransferManager {
    }
 
    @Override
-   public void notifyEndOfRebalance(int topologyId, int rebalanceId) {
-      localTopologyManager.confirmRebalance(cacheName, topologyId, rebalanceId, null);
+   public void notifyEndOfStateTransfer(int topologyId, int rebalanceId) {
+      localTopologyManager.confirmRebalancePhase(cacheName, topologyId, rebalanceId, null);
    }
 
    // TODO Investigate merging ownsData() and getFirstTopologyAsMember(), as they serve a similar purpose

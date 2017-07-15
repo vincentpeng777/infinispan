@@ -1,30 +1,26 @@
 package org.infinispan.functional;
 
-import static org.testng.Assert.fail;
+import static org.infinispan.test.Exceptions.expectExceptionNonStrict;
 import static org.testng.AssertJUnit.assertEquals;
 import static org.testng.AssertJUnit.assertNull;
 import static org.testng.AssertJUnit.assertTrue;
 
-import java.io.Serializable;
 import java.util.Collections;
 import java.util.NoSuchElementException;
 import java.util.Optional;
-import java.util.function.BiConsumer;
-import java.util.function.Function;
+import java.util.concurrent.CompletionException;
 import java.util.stream.IntStream;
 
 import javax.transaction.Status;
 import javax.transaction.TransactionManager;
 
 import org.infinispan.commons.CacheException;
-import org.infinispan.commons.api.functional.EntryView;
-import org.infinispan.commons.api.functional.FunctionalMap;
-import org.infinispan.commons.api.functional.Param;
-import org.infinispan.commons.marshall.MarshallableFunctions;
+import org.infinispan.marshall.core.MarshallableFunctions;
 import org.infinispan.functional.impl.ReadOnlyMapImpl;
 import org.infinispan.test.TestingUtil;
 import org.infinispan.transaction.LockingMode;
 import org.infinispan.util.concurrent.IsolationLevel;
+import org.infinispan.util.function.SerializableFunction;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -57,11 +53,11 @@ public class FunctionalTxInMemoryTest extends FunctionalInMemoryTest {
       }
       tm.begin();
       for (Object key : keys) {
-         assertEquals(method.action.eval(key, ro, (Serializable & Function<EntryView.ReadEntryView<Object, String>, String>) (e -> {
+         assertEquals(method.eval(key, ro, e -> {
             assertTrue(e.find().isPresent());
             assertEquals(e.get(), e.key());
             return "OK";
-         })), "OK");
+         }), "OK");
       }
       tm.commit();
    }
@@ -74,11 +70,11 @@ public class FunctionalTxInMemoryTest extends FunctionalInMemoryTest {
       }
       tm.begin();
       for (Integer key : keys) {
-         assertEquals(method.action.eval(key, lro, (Serializable & Function<EntryView.ReadEntryView<Integer, String>, String>) (e -> {
+         assertEquals(method.eval(key, lro, e -> {
             assertTrue(e.find().isPresent());
             assertEquals(e.get(), e.key());
             return "OK";
-         })), "OK");
+         }), "OK");
       }
       tm.commit();
    }
@@ -92,7 +88,7 @@ public class FunctionalTxInMemoryTest extends FunctionalInMemoryTest {
       assertEquals("a", rw.eval(KEY, append("b")).join());
       assertEquals("ab", rw.evalMany(Collections.singleton(KEY), append("c")).findAny().get());
       assertEquals(null, rw.eval("otherKey", append("d")).join());
-      assertEquals("abc", method.action.eval(KEY, ro, MarshallableFunctions.returnReadOnlyFindOrNull()));
+      assertEquals("abc", method.eval(KEY, ro, MarshallableFunctions.returnReadOnlyFindOrNull()));
       tm.commit();
    }
 
@@ -105,9 +101,9 @@ public class FunctionalTxInMemoryTest extends FunctionalInMemoryTest {
       assertEquals("a", rw.eval(KEY, append("b")).join());
       assertEquals("ab", rw.evalMany(Collections.singleton(KEY), append("c")).findAny().get());
       assertEquals(null, rw.eval("otherKey", append("d")).join());
-      assertEquals("abc", method.action.eval(KEY, wo, rw,
+      assertEquals("abc", method.eval(KEY, wo, rw,
             MarshallableFunctions.returnReadOnlyFindOrNull(),
-            (BiConsumer<EntryView.WriteEntryView<String>, String> & Serializable) (e, prev) -> {}, getClass()));
+            (e, prev) -> {}, getClass()));
       tm.commit();
    }
 
@@ -137,7 +133,7 @@ public class FunctionalTxInMemoryTest extends FunctionalInMemoryTest {
       tm.commit();
 
       tm.begin();
-      wo.eval(KEY, MarshallableFunctions.removeConsumer());
+      wo.eval(KEY, MarshallableFunctions.removeConsumer()).join();
       assertNull(cache.putIfAbsent(KEY, "y"));
       assertEquals("y", ro.eval(KEY, MarshallableFunctions.returnReadOnlyFindOrNull()).join());
       tm.commit();
@@ -161,16 +157,16 @@ public class FunctionalTxInMemoryTest extends FunctionalInMemoryTest {
       tm.begin();
       assertEquals("a", cache(0, DIST).put(KEY, "b"));
       // read-write operation should execute locally instead
-      assertEquals("b", method.action.eval(KEY, null, rw,
-            (Function<EntryView.ReadEntryView<Object, String>, String> & Serializable) EntryView.ReadEntryView::get,
-            (BiConsumer<EntryView.WriteEntryView<String>, String> & Serializable) (e, prev) -> e.set(prev + "c"), getClass()));
+      assertEquals("b", method.eval(KEY, null, rw,
+            EntryView.ReadEntryView::get,
+            (e, prev) -> e.set(prev + "c"), getClass()));
       // make sure that the operation was executed in context
       assertEquals("bc", ro.eval(KEY, MarshallableFunctions.returnReadOnlyFindOrNull()).join());
       tm.commit();
    }
 
-   private static Function<EntryView.ReadWriteEntryView<Object, String>, String> append(String str) {
-      return (Serializable & Function<EntryView.ReadWriteEntryView<Object, String>, String>) ev -> {
+   private static SerializableFunction<EntryView.ReadWriteEntryView<Object, String>, String> append(String str) {
+      return ev -> {
          Optional<String> prev = ev.find();
          if (prev.isPresent()) {
             ev.set(prev.get() + str);
@@ -189,29 +185,24 @@ public class FunctionalTxInMemoryTest extends FunctionalInMemoryTest {
 
    @Test(dataProvider = "readMethods")
    public void testReadOnMissingValuesLocal(ReadMethod method) throws Exception {
-      testReadOnMissingValue(INT_KEYS, ReadOnlyMapImpl.create(fmapL1).withParams(Param.FutureMode.COMPLETED), method);
+      testReadOnMissingValue(INT_KEYS, ReadOnlyMapImpl.create(fmapL1), method);
    }
 
    private <K> void testReadOnMissingValue(K[] keys, FunctionalMap.ReadOnlyMap<K, String> ro, ReadMethod method) throws Exception {
       tm.begin();
       for (K key : keys) {
-         Assert.assertEquals(ro.eval(key,
-               (Function<EntryView.ReadEntryView<K, String>, Boolean> & Serializable) (view -> view.find().isPresent())).join(), Boolean.FALSE);
+         Assert.assertEquals(ro.eval(key, view -> view.find().isPresent()).join(), Boolean.FALSE);
       }
       tm.commit();
 
       tm.begin();
       for (K key : keys) {
-         try {
-            method.action.eval(key, ro, (Function<EntryView.ReadEntryView<K, String>, Object> & Serializable) EntryView.ReadEntryView::get);
-            fail("Should throw CacheException:NoSuchElementException");
-         } catch (CacheException e) { // catches RemoteException, too
-            // The first exception should cause the whole transaction to fail
-            assertEquals(NoSuchElementException.class, e.getCause().getClass());
-            assertEquals(Status.STATUS_MARKED_ROLLBACK, tm.getStatus());
-            tm.rollback();
-            break;
-         }
+         expectExceptionNonStrict(CompletionException.class, CacheException.class, NoSuchElementException.class,
+               () -> method.eval(key, ro, EntryView.ReadEntryView::get));
+         // The first exception should cause the whole transaction to fail
+         assertEquals(Status.STATUS_MARKED_ROLLBACK, tm.getStatus());
+         tm.rollback();
+         break;
       }
       if (tm.getStatus() == Status.STATUS_ACTIVE) {
          tm.commit();

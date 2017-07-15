@@ -2,8 +2,8 @@ package org.infinispan.partitionhandling;
 
 import static org.infinispan.test.TestingUtil.extractComponent;
 import static org.infinispan.test.TestingUtil.extractLockManager;
-import static org.infinispan.test.TestingUtil.waitForRehashToComplete;
-import static org.infinispan.test.TestingUtil.wrapPerCacheInboundInvocationHandler;
+import static org.infinispan.test.TestingUtil.waitForNoRebalance;
+import static org.infinispan.test.TestingUtil.wrapInboundInvocationHandler;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -22,6 +22,7 @@ import org.infinispan.util.concurrent.ReclosableLatch;
 import org.infinispan.util.concurrent.TimeoutException;
 import org.infinispan.util.concurrent.locks.LockManager;
 import org.infinispan.util.logging.Log;
+import org.infinispan.util.logging.LogFactory;
 import org.testng.AssertJUnit;
 
 /**
@@ -31,6 +32,7 @@ import org.testng.AssertJUnit;
  * @since 8.0
  */
 public abstract class BaseTxPartitionAndMergeTest extends BasePartitionHandlingTest {
+   private static final Log log = LogFactory.getLog(BaseTxPartitionAndMergeTest.class);
 
    protected static final String INITIAL_VALUE = "init-value";
    protected static final String FINAL_VALUE = "final-value";
@@ -54,7 +56,7 @@ public abstract class BaseTxPartitionAndMergeTest extends BasePartitionHandlingT
    }
 
    private static void wrapAndApplyFilter(Cache<?, ?> cache, Filter filter) {
-      ControlledInboundHandler controlledInboundHandler = wrapPerCacheInboundInvocationHandler(cache, (wrapOn, current) -> new ControlledInboundHandler(current), true);
+      ControlledInboundHandler controlledInboundHandler = wrapInboundInvocationHandler(cache, ControlledInboundHandler::new);
       controlledInboundHandler.filter = filter;
    }
 
@@ -84,7 +86,7 @@ public abstract class BaseTxPartitionAndMergeTest extends BasePartitionHandlingT
    protected void mergeCluster(String cacheName) {
       getLog().debugf("Merging cluster");
       partition(0).merge(partition(1));
-      waitForRehashToComplete(caches(cacheName));
+      waitForNoRebalance(caches(cacheName));
       for (int i = 0; i < numMembersInCluster; i++) {
          PartitionHandlingManager phmI = partitionHandlingManager(cache(i, cacheName));
          eventuallyEquals(AvailabilityMode.AVAILABLE, phmI::getAvailabilityMode);
@@ -195,6 +197,8 @@ public abstract class BaseTxPartitionAndMergeTest extends BasePartitionHandlingT
          final Filter currentFilter = filter;
          if (currentFilter != null && currentFilter.before(command, reply, order)) {
             delegate.handle(command, reply, order);
+         } else {
+            log.debugf("Ignoring command %s", command);
          }
       }
    }

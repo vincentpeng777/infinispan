@@ -1,5 +1,7 @@
 package org.infinispan.server.hotrod;
 
+import java.util.concurrent.TimeUnit;
+
 import javax.security.auth.Subject;
 
 import org.infinispan.AdvancedCache;
@@ -12,6 +14,7 @@ import org.infinispan.container.versioning.SimpleClusteredVersion;
 import org.infinispan.container.versioning.VersionGenerator;
 import org.infinispan.context.Flag;
 import org.infinispan.factories.ComponentRegistry;
+import org.infinispan.lifecycle.ComponentStatus;
 import org.infinispan.manager.EmbeddedCacheManager;
 import org.infinispan.metadata.EmbeddedMetadata;
 import org.infinispan.metadata.Metadata;
@@ -25,7 +28,7 @@ import org.infinispan.util.logging.LogFactory;
  * Invokes operations against the cache based on the state kept during decoding process
  */
 public final class CacheDecodeContext {
-   static final long MillisecondsIn30days = 60 * 60 * 24 * 30 * 1000l;
+   static final long MillisecondsIn30days = TimeUnit.DAYS.toMillis(30);
    static final Log log = LogFactory.getLog(CacheDecodeContext.class, Log.class);
    static final boolean isTrace = log.isTraceEnabled();
 
@@ -37,11 +40,11 @@ public final class CacheDecodeContext {
 
    VersionedDecoder decoder;
    HotRodHeader header;
-   Subject subject;
    AdvancedCache<byte[], byte[]> cache;
    byte[] key;
    RequestParameters params;
    Object operationDecodeContext;
+   Subject subject;
 
    public HotRodHeader getHeader() {
       return header;
@@ -98,10 +101,10 @@ public final class CacheDecodeContext {
          return notExecutedResp(prev);
    }
 
-   void obtainCache(EmbeddedCacheManager cacheManager, boolean loopback) throws RequestParsingException {
+   void obtainCache(EmbeddedCacheManager cacheManager) throws RequestParsingException {
       String cacheName = header.cacheName;
       // Try to avoid calling cacheManager.getCacheNames() if possible, since this creates a lot of unnecessary garbage
-      AdvancedCache<byte[], byte[]> cache = server.getKnownCacheInstance(cacheName);
+      AdvancedCache<byte[], byte[]> cache = server.getKnownCache(cacheName);
       if (cache == null) {
          // Talking to the wrong cache are really request parsing errors
          // and hence should be treated as client errors
@@ -111,15 +114,9 @@ public final class CacheDecodeContext {
                   String.format("Remote requests are not allowed to private caches. Do no send remote requests to cache '%s'", cacheName),
                   header.version, header.messageId);
          } else if (icr.internalCacheHasFlag(cacheName, InternalCacheRegistry.Flag.PROTECTED)) {
-            if (!cacheManager.getCacheManagerConfiguration().security().authorization().enabled() && !loopback) {
-               throw new RequestParsingException(
-                     String.format("Remote requests are allowed to protected caches only over loopback or if authorization is enabled. Do no send remote requests to cache '%s'", cacheName),
-                     header.version, header.messageId);
-            } else {
-               // We want to make sure the cache access is checked everytime, so don't store it as a "known" cache. More
-               // expensive, but these caches should not be accessed frequently
-               cache = server.getCacheInstance(cacheName, cacheManager, true, false);
-            }
+            // We want to make sure the cache access is checked everytime, so don't store it as a "known" cache. More
+            // expensive, but these caches should not be accessed frequently
+            cache = server.getCacheInstance(cacheName, cacheManager, true, false);
          } else if (!cacheName.isEmpty() && !cacheManager.getCacheNames().contains(cacheName)) {
             throw new CacheNotFoundException(
                   String.format("Cache with name '%s' not found amongst the configured caches", cacheName),
@@ -129,6 +126,11 @@ public final class CacheDecodeContext {
          }
       }
       this.cache = decoder.getOptimizedCache(header, cache, server.getCacheConfiguration(cacheName));
+   }
+
+   void withSubect(Subject subject) {
+      this.subject = subject;
+      this.cache = cache.withSubject(subject);
    }
 
    Metadata buildMetadata() {

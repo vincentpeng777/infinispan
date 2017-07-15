@@ -5,7 +5,7 @@
    <parent>
       <groupId>org.infinispan</groupId>
       <artifactId>infinispan-all-parent</artifactId>
-      <version>9.0.1-SNAPSHOT</version>
+      <version>9.1.1-SNAPSHOT</version>
       <relativePath>../pom.xml</relativePath>
    </parent>
 
@@ -140,18 +140,8 @@
       </dependency>
 
       <dependency>
-         <groupId>org.jboss</groupId>
-         <artifactId>jboss-dmr</artifactId>
-         <optional>${uberjar.deps.optional}</optional>
-      </dependency>
-      <dependency>
          <groupId>org.jgroups.kubernetes</groupId>
-         <artifactId>dns</artifactId>
-         <optional>${uberjar.deps.optional}</optional>
-      </dependency>
-      <dependency>
-         <groupId>org.jgroups.kubernetes</groupId>
-         <artifactId>kubernetes</artifactId>
+         <artifactId>jgroups-kubernetes</artifactId>
          <optional>${uberjar.deps.optional}</optional>
       </dependency>
    </dependencies>
@@ -202,6 +192,7 @@
                            <exclude>org.osgi:org.osgi.core:jar:</exclude>
                            <exclude>org.osgi:org.osgi.compendium:jar:</exclude>
                            <exclude>com.google.code.findbugs:jsr305:jar:</exclude>
+                           <exclude>org.infinispan:infinispan-license:jar:</exclude>
                         </excludes>
                      </artifactSet>
                      <filters>
@@ -267,7 +258,7 @@
                            </excludes>
                         </filter>
                      </filters>
-                     <createSourcesJar>true</createSourcesJar>
+                     <createSourcesJar>${createSourcesJar}</createSourcesJar>
                      <relocations>
                         <relocation>
                            <pattern>org.jboss.dmr</pattern>
@@ -285,6 +276,8 @@
                            <pattern>com.mchange</pattern>
                            <shadedPattern>infinispan.com.mchange</shadedPattern>
                         </relocation>
+                        
+                        
                      </relocations>
                      <transformers>
                         <transformer implementation="org.apache.maven.plugins.shade.resource.DontIncludeResourceTransformer">
@@ -301,7 +294,6 @@
          <plugin>
             <groupId>org.apache.felix</groupId>
             <artifactId>maven-bundle-plugin</artifactId>
-            <version>2.4.0</version>
             <executions>
                <execution>
                   <id>default-bundle</id>
@@ -341,6 +333,9 @@
                            !javax.persistence.*,
                            !net.jcip.annotations,
                            !org.hibernate.*,
+                           !javassist.*,
+                           !org.apache.log4j.*,
+                           !org.apache.logging.log4j.*,
                            !org.infinispan.*,
                            !org.infinispan.client.*,
                            !org.jgroups.*,
@@ -368,10 +363,9 @@
          <plugin>
             <groupId>org.codehaus.mojo</groupId>
             <artifactId>build-helper-maven-plugin</artifactId>
-            <version>1.8</version>
             <executions>
                <execution>
-                  <id>attach-artifacts</id>
+                  <id>attach-feature-xml</id>
                   <phase>package</phase>
                   <goals>
                      <goal>attach-artifact</goal>
@@ -383,33 +377,26 @@
                            <type>xml</type>
                            <classifier>features</classifier>
                         </artifact>
+                     </artifacts>
+                  </configuration>
+               </execution>
+               <execution>
+                  <id>attach-source-jar</id>
+                  <phase>package</phase>
+                  <goals>
+                     <goal>attach-artifact</goal>
+                  </goals>
+                  <configuration>
+                     <skipAttach>${skipCreateSourcesJar}</skipAttach>
+                     <artifacts>
                         <artifact>
+                           
                            <file>target/${project.build.finalName}-shaded-sources.jar</file>
                            <type>jar</type>
                            <classifier>sources</classifier>
                         </artifact>
                      </artifacts>
                   </configuration>
-               </execution>
-            </executions>
-         </plugin>
-         <plugin>
-            <artifactId>maven-source-plugin</artifactId>
-            <version>2.3</version>
-            <executions>
-               <execution>
-                  <id>attach-sources</id>
-                  <phase>none</phase>
-               </execution>
-            </executions>
-         </plugin>
-         <plugin>
-            <artifactId>maven-jar-plugin</artifactId>
-            <version>2.4</version>
-            <executions>
-               <execution>
-                  <id>build-test-jar</id>
-                  <phase>none</phase>
                </execution>
             </executions>
          </plugin>

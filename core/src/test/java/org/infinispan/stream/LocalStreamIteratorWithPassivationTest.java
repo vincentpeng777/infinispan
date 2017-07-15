@@ -35,7 +35,6 @@ import org.infinispan.persistence.spi.AdvancedCacheLoader;
 import org.infinispan.test.TestingUtil;
 import org.infinispan.test.fwk.CheckPoint;
 import org.mockito.AdditionalAnswers;
-import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.testng.annotations.Test;
 
@@ -245,18 +244,15 @@ public class LocalStreamIteratorWithPassivationTest extends DistributedStreamIte
       PersistenceManager pm = TestingUtil.extractComponent(cache, PersistenceManager.class);
       final Answer<Object> forwardedAnswer = AdditionalAnswers.delegatesTo(pm);
       PersistenceManager mockManager = mock(PersistenceManager.class, withSettings().defaultAnswer(forwardedAnswer));
-      doAnswer(new Answer() {
-         @Override
-         public Object answer(InvocationOnMock invocation) throws Throwable {
-            // Wait for main thread to sync up
-            checkPoint.trigger("pre_process_on_all_stores_invoked");
-            // Now wait until main thread lets us through
-            checkPoint.awaitStrict("pre_process_on_all_stores_released", 10, TimeUnit.SECONDS);
+      doAnswer(invocation -> {
+         // Wait for main thread to sync up
+         checkPoint.trigger("pre_process_on_all_stores_invoked");
+         // Now wait until main thread lets us through
+         checkPoint.awaitStrict("pre_process_on_all_stores_released", 10, TimeUnit.SECONDS);
 
-            return forwardedAnswer.answer(invocation);
-         }
-      }).when(mockManager).processOnAllStores(any(Executor.class),      any(KeyFilter.class), any(AdvancedCacheLoader.CacheLoaderTask.class),
-                                                  anyBoolean(), anyBoolean());
+         return forwardedAnswer.answer(invocation);
+      }).when(mockManager).processOnAllStores(any(Executor.class), any(KeyFilter.class), any(AdvancedCacheLoader.CacheLoaderTask.class),
+                                                 anyBoolean(), anyBoolean());
       TestingUtil.replaceComponent(cache, PersistenceManager.class, mockManager, true);
       return pm;
    }
@@ -264,9 +260,6 @@ public class LocalStreamIteratorWithPassivationTest extends DistributedStreamIte
    /**
     * This test is to verify that if a concurrent passivation occurs while switching between data container and loader(s)
     * that we don't return the same key/value twice
-    * @throws InterruptedException
-    * @throws ExecutionException
-    * @throws TimeoutException
     */
    @Test
    public void testConcurrentPassivation() throws InterruptedException, ExecutionException, TimeoutException {

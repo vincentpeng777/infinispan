@@ -2,7 +2,7 @@
 <!-- See src/resources/configuration/ReadMe.txt for how the configuration assembly works -->
 <config default-supplement="default">
    <extension-module>org.infinispan.extension</extension-module>
-   <subsystem xmlns="urn:infinispan:server:core:9.0" default-cache-container="@@default-cache-container@@">
+   <subsystem xmlns="urn:infinispan:server:core:9.1" default-cache-container="@@default-cache-container@@">
       <?CACHE-CONTAINERS?>
    </subsystem>
    <supplement name="default">
@@ -94,7 +94,7 @@
                <file-store passivation="true" path="dc" purge="true" shared="false" />
             </local-cache>
             <local-cache name="namedCache">
-               <expiration lifespan="2000" max-idle="1000" />
+               <expiration lifespan="2000"/>
                <file-store passivation="false" path="nc" purge="true" shared="false">
                   <write-behind modification-queue-size="1024" thread-pool-size="1" />
                </file-store>
@@ -114,7 +114,7 @@
                <rocksdb-store passivation="true" path="rocksdb-dc" purge="true" shared="false" />
             </local-cache>
             <local-cache name="namedCache">
-               <expiration lifespan="2000" max-idle="1000" />
+               <expiration lifespan="2000" />
                <rocksdb-store path="rocksdb-nc" block-size="1024" cache-size="50000" clear-threshold="100000">
                   <expiration path="rocksdb-nc-expired" queue-size="2000"/>
                   <compression type="SNAPPY"/>
@@ -131,6 +131,20 @@
             <local-cache name="default">
                <remote-store cache="default" socket-timeout="60000" tcp-no-delay="true" shared="true" hotrod-wrapping="true" purge="false" passivation="false">
                   <remote-server outbound-socket-binding="remote-store-hotrod-server" />
+               </remote-store>
+            </local-cache>
+         </cache-container>
+      </replacement>
+   </supplement>
+   <supplement name="hotrod-rolling-upgrade-ssl">
+      <replacement placeholder="@@default-cache-container@@" attributeValue="local" />
+      <replacement placeholder="CACHE-CONTAINERS">
+         <cache-container name="local" default-cache="default">
+            <global-state />
+            <local-cache name="default">
+               <remote-store cache="default" socket-timeout="60000" tcp-no-delay="true" shared="true" hotrod-wrapping="true" purge="false" passivation="false">
+                  <remote-server outbound-socket-binding="remote-store-hotrod-server" />
+                  <encryption security-realm="ApplicationRealm"/>
                </remote-store>
             </local-cache>
          </cache-container>
@@ -183,7 +197,7 @@
                </remote-store>
             </local-cache>
             <local-cache name="namedCache">
-               <expiration lifespan="2000" max-idle="1000" />
+               <expiration lifespan="3000"/>
                <remote-store cache="namedCache" socket-timeout="60000" tcp-no-delay="true" passivation="false">
                   <remote-server outbound-socket-binding="remote-store-hotrod-server" />
                </remote-store>
@@ -295,7 +309,7 @@
             <!-- Indexes are local to each node, stored in memory -->
             <replicated-cache name="InMemoryNonSharedIndex">
                <indexing index="ALL">
-                  <property name="default.directory_provider">ram</property>
+                  <property name="default.directory_provider">local-heap</property>
                </indexing>
             </replicated-cache>
             <!-- Indexes are local to each node, stored on infinispan itself on configured caches -->
